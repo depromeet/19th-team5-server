@@ -20,4 +20,5 @@
 
 ## 설계 문서
 
-- 추후 작성 (노션 링크)
+- [docs/](docs/README.md): 현재 설계(`design/`) · 변경 제안(`rfc/`) · 결정 근거(`adr/`)
+- [CONTRIBUTING.md](CONTRIBUTING.md): 브랜치 · 커밋 · PR 규칙
