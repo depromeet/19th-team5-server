@@ -5,7 +5,8 @@
 language: "ko-KR"
 
 reviews:
-  profile: "chill"
+  # quiet: 중요한 문제 위주로만 짧게 지적 (chill, assertive 순으로 깐깐해짐)
+  profile: "quiet"
   auto_review:
     enabled: true
     # 기본 브랜치 외에 자동 리뷰할 base 브랜치.
