@@ -1,7 +1,7 @@
 ---
 name: 🐞 버그
 about: 버그 제보
-title: ""
+title: "[fix] "
 labels: ""
 assignees: ""
 ---
