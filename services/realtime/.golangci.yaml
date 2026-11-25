@@ -1,0 +1,35 @@
+version: "2"
+
+linters:
+  enable:
+    - asasalint
+    - bidichk
+    - bodyclose
+    - durationcheck
+    - errorlint
+    - fatcontext
+    - gocritic
+    - gosec
+    - makezero
+    - misspell
+    - modernize
+    - nilerr
+    - noctx
+    - nolintlint
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - usestdlibvars
+    - usetesting
+
+  settings:
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: deep-exit
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
