@@ -29,7 +29,8 @@
 - 409인 이유: 401은 프론트가 "로그인 화면으로"라고 해석한다. 409는 "충돌이니 다시 시도"다
 - `FOR UPDATE`가 없으면 두 요청이 모두 "살아 있다"고 읽고 둘 다 새 토큰을 발급해서 묶음이 두 갈래로 갈라진다
 - 폐기 쿼리를 살아 있는 토큰으로 좁히는 이유: 바깥 트랜잭션이 `FOR UPDATE`로 잡은 행을 `REQUIRES_NEW` 트랜잭션이 고치려 하면, 바깥이 끝나기를 기다리는데 바깥은 안쪽이 끝나야 진행한다. 두 트랜잭션이 다른 DB 연결이라 DB가 교착 상태로 알아채지 못하고 잠금 대기 시간이 끝날 때까지 멈춘다. 잠긴 행은 이미 폐기된 토큰이라 `revoked_at IS NULL` 조건에서 빠진다
-- 10초 유예는 표준에 없는 우리 규칙이다. 유예 중에도 옛 토큰으로 새 토큰을 주지 않으므로 RFC 9700을 어기지 않는다
+- 10초 유예는 RFC에는 없지만 상용 서비스도 같은 장치를 둔다: Okta 기본 30초(0~60초), AWS Cognito 최대 60초, Auth0 "Rotation Overlap Period". 우리는 `navigator.locks`가 대부분 막으므로 그 범위 안에서 짧은 10초로 했다. 유예 중에도 옛 토큰으로 새 토큰을 주지 않으므로 RFC 9700을 어기지 않는다
+- 14일인 이유: 브라우저 앱(SPA)에 Microsoft Entra는 24시간, AWS Cognito·Auth0는 기본 30일을 준다. 24시간이면 면접을 예약하고 다시 들어올 때마다 로그인해야 한다. HttpOnly 쿠키와 Rotation·재사용 감지로 탈취 위험을 줄였으므로 30일보다 짧은 14일로 했다
 
 ## 결과
 
@@ -40,3 +41,10 @@
   - 재사용이 감지되면 진짜 사용자도 다시 로그인해야 한다
 - 확인할 것 (실험): 재사용 감지 때 묶음 폐기가 멈추지 않고 커밋되는지, 401 뒤에도 폐기가 롤백되지 않고 남는지
 - 아직 정할 것: 새 토큰의 만료 시각. 첫 로그인 + 14일 고정(14일마다 재로그인, 더 안전)과 지금 + 14일 연장 중 구현 때 정한다
+
+## 참고
+
+- [Microsoft Entra: 액세스 토큰](https://learn.microsoft.com/en-us/entra/identity-platform/access-tokens), [리프레시 토큰](https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens)
+- [AWS Cognito: 리프레시 토큰](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-refresh-token.html)
+- [Auth0: 리프레시 토큰 교체 설정](https://auth0.com/docs/secure/tokens/refresh-tokens/configure-refresh-token-rotation)
+- [Okta: 리프레시 토큰](https://developer.okta.com/docs/guides/refresh-tokens/main/)
