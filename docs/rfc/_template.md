@@ -1,3 +1,4 @@
+<!-- 파일 이름: NNNN-도메인-바꾸려는것.md (예: 0001-auth-websocket-ticket.md). NNNN은 rfc/의 다음 번호. 규칙은 docs/README.md "파일 이름" -->
 # <무엇을 바꾸는지> <!-- 예: WebSocket 인증을 티켓 방식으로 변경 -->
 
 상태: 검토중 | 작성: <이름> | YYYY-MM-DD | 대상: [design/<도메인>.md](../design/<도메인>.md)

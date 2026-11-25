@@ -36,12 +36,17 @@
 | 폴더 | 이름 규칙 | 예시 |
 | --- | --- | --- |
 | `design/` | `도메인.md` | `auth.md`, `reservation.md` |
-| `rfc/` | `도메인-바꾸려는것.md` | `auth-websocket-ticket.md` |
-| `adr/` | `도메인-정한것.md` | `auth-use-jwt.md`, `auth-websocket-ticket.md` |
+| `rfc/` | `NNNN-도메인-바꾸려는것.md` | `0001-auth-websocket-ticket.md` |
+| `adr/` | `NNNN-도메인-정한것.md` | `0001-auth-use-jwt.md` |
 
-- 파일 이름은 영문 kebab-case, 문서 제목(`#`)은 한국어
-- 승인된 RFC와 그 결과 ADR은 같은 이름을 써도 된다 (폴더가 달라 짝을 찾기 쉽다)
-- 한 서버에만 해당하는 기술 결정은 서버 이름으로 시작해도 된다 (예: `realtime-use-gorilla-websocket.md`)
+- **번호:** RFC와 ADR에만 4자리 번호를 붙인다. design은 도메인마다 하나뿐이고 계속 고쳐 쓰므로 붙이지 않는다.
+  - 번호는 PR을 올릴 때 그 폴더의 다음 번호로 정한다. RFC와 ADR은 따로 센다.
+  - 본문에서는 `RFC-0003`, `ADR-0003`처럼 종류를 붙여 부른다.
+  - 거절된 RFC와 대체된 ADR도 번호를 그대로 두고, 그 번호를 다시 쓰지 않는다.
+  - 열린 PR 두 개가 같은 번호를 쓰면, 나중에 머지하는 쪽이 번호를 바꾼다.
+- **도메인:** `design/`의 파일 이름과 같게 쓴다(`auth.md`의 결정은 `NNNN-auth-...`). design 문서가 없는 주제를 결정할 때는 design 문서를 함께 만든다. 두 서버에 걸치는 주제(배포, 로깅, 공통 에러 형식 등)도 마찬가지다(예: `infra.md`, `observability.md`). 한 서버에만 해당하는 기술 결정은 서버 이름을 쓴다(예: `0002-realtime-use-gorilla-websocket.md`).
+- **형식:** 영문 kebab-case로 쓴다. ADR은 정한 내용을 동사구로(`use-jwt`), RFC는 바꾸려는 것을(`websocket-ticket`) 쓴다.
+- RFC와 그 결과 ADR은 번호가 달라도 된다. 짝은 ADR 첫 줄의 "관련 RFC" 링크로 잇는다.
 
 ## 문서 제목
 
@@ -50,6 +55,8 @@
 | `design/` | 도메인 이름 | 인증/인가 설계 |
 | `rfc/` | 무엇을 바꾸는지 | WebSocket 인증을 티켓 방식으로 변경 |
 | `adr/` | 정한 내용을 평서문으로 | 인증에 JWT를 사용한다 |
+
+제목은 한국어로 쓰고 번호는 넣지 않는다. 번호는 파일 이름에만 둔다.
 
 각 폴더의 `_template.md`를 복사해서 시작한다.
 
