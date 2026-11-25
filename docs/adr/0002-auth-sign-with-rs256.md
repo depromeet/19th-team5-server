@@ -47,4 +47,4 @@ RS256(RSA 2048비트 이상)으로 서명한다. 개인키는 core만 갖고, �
 ## 결과
 
 - 얻는 것: realtime은 공개키만 가지므로 토큰을 위조할 수 없다. 검증이 빠르다. `kid` 기반이라 나중에 EdDSA 등으로 옮길 수 있다 (새 `kid`로 추가 → 발급 전환 → 옛 토큰 만료 후 제거)
-- 감수하는 것: 토큰이 ES256보다 256자 길다. 개인키와 JWKS를 관리해야 한다 ([서명 키 결정](auth-signing-key-in-secrets-manager.md))
+- 감수하는 것: 토큰이 ES256보다 256자 길다. 개인키와 JWKS를 관리해야 한다 ([ADR-0010](0010-auth-signing-key-in-secrets-manager.md))

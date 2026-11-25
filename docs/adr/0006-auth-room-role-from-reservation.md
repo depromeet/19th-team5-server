@@ -22,4 +22,4 @@
 ## 결과
 
 - 얻는 것: 토큰은 계정 하나에 하나로 단순하다. 방 안 권한 판단은 realtime 메모리에서 끝난다
-- 감수하는 것: realtime → core gRPC 호출이 생긴다. 이 호출의 인증이 필요하다 ([gRPC 인증 결정](auth-grpc-shared-token.md))
+- 감수하는 것: realtime → core gRPC 호출이 생긴다. 이 호출의 인증이 필요하다 ([ADR-0009](0009-auth-grpc-shared-token.md))

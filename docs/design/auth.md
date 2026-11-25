@@ -149,7 +149,7 @@ core: 쿠키 값 → SHA-256 → DB 조회 (SELECT ... FOR UPDATE)
 ```
 
 - `revoke_reason`: `ROTATED`, `LOGOUT`, `REUSE_DETECTED`, `PASSWORD_CHANGED`, `WITHDRAWN`. 10초 유예는 `ROTATED`에만 준다
-- 재사용 감지 때 family 폐기는 401 예외와 함께 롤백되지 않게 별도 트랜잭션(`REQUIRES_NEW`)으로 커밋한다
+- 재사용 감지 때 family 폐기는 401 예외와 함께 롤백되지 않게 별도 트랜잭션(`REQUIRES_NEW`)으로 커밋한다. 이 폐기 쿼리는 살아 있는 토큰(`revoked_at IS NULL`)만 고친다. `FOR UPDATE`로 잠긴 행을 고치면 두 트랜잭션이 서로를 기다리며 멈춘다
 - 브라우저는 `navigator.locks`로 한 번에 한 탭만 재발급한다. 409를 받은 탭은 1회 재시도한다 (새 쿠키가 이미 실려 성공한다)
 - 새 리프레시 토큰의 만료 시각(첫 로그인 + 14일 고정 / 지금 + 14일 연장)은 구현 때 정한다
 - 비밀번호 변경·탈퇴 시 그 회원의 리프레시 토큰을 전부 폐기한다
@@ -271,16 +271,16 @@ realtime이 방 안에서 판단하는 것 (예시):
 
 ## 관련 결정
 
-- [인증에 JWT를 쓰고 각 서버가 직접 검증한다](../adr/auth-use-jwt.md)
-- [토큰은 RS256으로 서명한다](../adr/auth-sign-with-rs256.md)
-- [토큰 형식과 검증 규칙은 RFC 9068과 RFC 8725를 따른다](../adr/auth-follow-rfc9068.md)
-- [리프레시 토큰은 DB에 저장하는 랜덤 문자열로 만들고 쓸 때마다 교체한다](../adr/auth-opaque-refresh-token.md)
-- [로그아웃은 리프레시 토큰만 폐기한다](../adr/auth-logout-without-blacklist.md)
-- [방 역할은 토큰에 넣지 않고 예약 데이터에서 받는다](../adr/auth-room-role-from-reservation.md)
-- [WebSocket은 일회용 티켓으로 인증한다](../adr/auth-websocket-ticket.md)
-- [게스트 토큰을 발급하지 않고 로비는 공개 조회로 연다](../adr/auth-remove-guest-token.md)
-- [realtime → core gRPC는 공유 랜덤 토큰으로 인증한다](../adr/auth-grpc-shared-token.md)
-- [서명 키는 Secrets Manager에 두고 메모리에만 올린다](../adr/auth-signing-key-in-secrets-manager.md)
-- [게이트웨이 없이 core가 직접 요청 제한을 한다](../adr/auth-no-gateway.md)
-- [비밀번호 해시 앞에 알고리즘 이름표를 붙인다](../adr/auth-prefix-password-hash.md)
-- [비밀번호 해싱은 동시에 N개까지만 처리한다](../adr/auth-limit-hashing-concurrency.md)
+- [ADR-0001: 인증에 JWT를 쓰고 각 서버가 직접 검증한다](../adr/0001-auth-use-jwt.md)
+- [ADR-0002: 토큰은 RS256으로 서명한다](../adr/0002-auth-sign-with-rs256.md)
+- [ADR-0003: 토큰 형식과 검증 규칙은 RFC 9068과 RFC 8725를 따른다](../adr/0003-auth-follow-rfc9068.md)
+- [ADR-0004: 리프레시 토큰은 DB에 저장하는 랜덤 문자열로 만들고 쓸 때마다 교체한다](../adr/0004-auth-opaque-refresh-token.md)
+- [ADR-0005: 로그아웃은 리프레시 토큰만 폐기한다](../adr/0005-auth-logout-without-blacklist.md)
+- [ADR-0006: 방 역할은 토큰에 넣지 않고 예약 데이터에서 받는다](../adr/0006-auth-room-role-from-reservation.md)
+- [ADR-0007: WebSocket은 일회용 티켓으로 인증한다](../adr/0007-auth-websocket-ticket.md)
+- [ADR-0008: 게스트 토큰을 발급하지 않고 로비는 공개 조회로 연다](../adr/0008-auth-remove-guest-token.md)
+- [ADR-0009: realtime → core gRPC는 공유 랜덤 토큰으로 인증한다](../adr/0009-auth-grpc-shared-token.md)
+- [ADR-0010: 서명 키는 Secrets Manager에 두고 메모리에만 올린다](../adr/0010-auth-signing-key-in-secrets-manager.md)
+- [ADR-0011: 게이트웨이 없이 core가 직접 요청 제한을 한다](../adr/0011-auth-no-gateway.md)
+- [ADR-0012: 비밀번호 해시 앞에 알고리즘 이름표를 붙인다](../adr/0012-auth-prefix-password-hash.md)
+- [ADR-0013: 비밀번호 해싱은 동시에 N개까지만 처리한다](../adr/0013-auth-limit-hashing-concurrency.md)

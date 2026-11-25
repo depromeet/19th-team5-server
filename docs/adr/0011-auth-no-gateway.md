@@ -35,5 +35,5 @@
 - 감수하는 것
   - 요청 제한 상태가 core 메모리에 있어서 core가 여러 대가 되면 서버마다 따로 센다
   - 앞에 로드밸런서나 프록시를 두는 순간 remote address가 그 장비 주소가 된다. 그때 "신뢰하는 프록시가 붙인 값만 믿는다"(엣지에서 `X-Forwarded-For`를 덮어쓰고, Spring은 `forward-headers-strategy=native`로 내부 IP만 신뢰)로 바꾸는 새 ADR을 쓴다
-  - IP를 바꿔 가며 오는 대량 요청은 IP 기준으로 막지 못한다. 해싱 동시 처리 제한([결정](auth-limit-hashing-concurrency.md))이 2차 방어다
+  - IP를 바꿔 가며 오는 대량 요청은 IP 기준으로 막지 못한다. 해싱 동시 처리 제한([ADR-0013](0013-auth-limit-hashing-concurrency.md))이 2차 방어다
 - 확인할 것 (실험): `X-Forwarded-For: 1.2.3.4`를 넣어도 제한이 우회되지 않는지, 같은 IP에서 계정 20개로 로그인할 때 정상 사용자가 막히는 시점
