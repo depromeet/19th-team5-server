@@ -1,7 +1,7 @@
 ---
 name: ♻️ 리팩토링
 about: 동작 변경 없이 구조 개선
-title: ""
+title: "[refactor] "
 labels: ""
 assignees: ""
 ---
