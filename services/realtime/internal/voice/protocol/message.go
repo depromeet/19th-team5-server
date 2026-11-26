@@ -36,7 +36,7 @@ type Candidate struct {
 // Leave asks to leave the voice channel.
 type Leave struct{}
 
-// ErrorMessage reports that the server failed to handle a request.
+// ErrorMessage reports that a request or the voice connection failed.
 type ErrorMessage struct {
 	Reason  ErrorReason `json:"reason"`
 	Message string      `json:"message"`
@@ -45,11 +45,17 @@ type ErrorMessage struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-// ErrorReason is why a request failed.
+// ErrorReason is why a request or the voice connection failed. New reasons may
+// be added, so clients must handle reasons that they do not know.
 type ErrorReason string
 
-// ErrorReasonInvalidMessage means [Parse] rejected the message.
-const ErrorReasonInvalidMessage ErrorReason = "INVALID_MESSAGE"
+const (
+	// ErrorReasonInvalidMessage means [Parse] rejected the message.
+	ErrorReasonInvalidMessage ErrorReason = "INVALID_MESSAGE"
+	// ErrorReasonConnectionFailed means the server could not set up or
+	// negotiate the voice connection, and the connection no longer exists.
+	ErrorReasonConnectionFailed ErrorReason = "CONNECTION_FAILED"
+)
 
 // isClientMessage ensures that only client messages can be a ClientMessage.
 func (Join) isClientMessage()      {}

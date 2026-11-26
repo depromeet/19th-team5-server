@@ -1,0 +1,33 @@
+// Package media defines the contract between voice signaling and the media
+// implementation that runs the WebRTC connections.
+package media
+
+import "context"
+
+// Engine opens one WebRTC connection per participant. The participant ID tells
+// the participant's voice apart from others when it is forwarded. If Open
+// fails, it leaves no connection behind. Otherwise the caller must call
+// [Conn.Close] when it is done with the Conn.
+type Engine interface {
+	Open(ctx context.Context, participantID string) (Conn, error)
+}
+
+// Conn is a participant's WebRTC connection.
+type Conn interface {
+	// Close ends the connection. The Conn must not be used afterwards.
+	Close() error
+	// CreateOffer creates an SDP offer and sets it as the local description.
+	CreateOffer(ctx context.Context) (sdp string, err error)
+	// ApplyAnswer sets sdp, an SDP answer, as the remote description.
+	ApplyAnswer(ctx context.Context, sdp string) error
+	// AddCandidate fails until [Conn.ApplyAnswer] has succeeded once.
+	AddCandidate(ctx context.Context, c Candidate) error
+}
+
+// Candidate is a W3C RTCIceCandidateInit.
+type Candidate struct {
+	Candidate        string
+	SDPMid           *string
+	SDPMLineIndex    *uint16
+	UsernameFragment *string
+}
