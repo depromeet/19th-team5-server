@@ -16,10 +16,10 @@ core만 토큰을 만들고(개인키 서명), realtime은 공개키로 혼자 �
 - 같은 사람이 방마다 면접관도, 면접자도 될 수 있게 방 단위로 권한을 판단한다. 시간 조건이 붙은 권한(예: 시작 1시간 전부터 면접관만 자소서 열람)도 판단한다
 - 상대 참가자에게는 닉네임만 보이고 회원 ID, 이메일, IP는 노출하지 않는다
 - 토큰이 탈취돼도 피해 범위를 줄인다. 액세스 토큰은 30분, WebSocket 티켓은 30초 동안 한 번만 쓸 수 있고(검증 때 시계 여유 60초를 더 준다), 리프레시 토큰은 재사용을 감지하면 바로 막는다
-- 로그인이 처리 한계의 2배로 몰려도, 넘친 로그인은 503으로 빠르게 거절되고 다른 API는 실패 없이 p99 1초 안에 응답한다
+- 로그인이 처리 한계의 2배로 몰려도 다른 API는 실패 없이 p99 1초 안에 응답한다
   - 처리 한계 = 코어 수 ÷ 배포 서버에서 잰 해싱 1회 시간
   - 1초는 사용자의 생각 흐름이 끊기지 않는 응답 시간 한계다 (Jakob Nielsen, Response Times: The 3 Important Limits)
-  - k6로 해싱 동시 처리 제한을 켰을 때와 껐을 때를 비교해 확인한다 ([ADR-0013](../adr/0013-auth-limit-hashing-concurrency.md))
+  - k6로 먼저 제한 없이 재고, 깨지면 해싱 동시 처리 제한을 넣어 전후를 비교한다 ([ADR-0013](../adr/0013-auth-limit-hashing-concurrency.md))
 - Redis 없이 서버 한 대와 PostgreSQL만으로 시작한다
 
 **비목표**
@@ -118,7 +118,6 @@ core 안의 모듈끼리 주고받는 것:
 ```
 브라우저 → core: POST /api/v1/auth/login (이메일, 비밀번호)
 core: 요청 제한 확인 (계정별 엄격, IP별 느슨) → 넘으면 429
-core: 해싱 자리 확보 (동시 N개, 최대 1초 대기) → 없으면 503 SERVICE_BUSY + Retry-After: 1
 core: 비밀번호 비교 (없는 이메일도 더미 해시와 비교해 응답 시간을 맞춘다)
 core: 리프레시 토큰 생성 (새 family_id) → DB에 해시 저장
 core → 브라우저: 액세스 토큰(본문) + 리프레시 토큰(쿠키)
@@ -249,7 +248,7 @@ core: 쿠키 값 → SHA-256 → DB 조회 (SELECT ... FOR UPDATE)
   - 옛 알고리즘 회원은 로그인 성공 때 새 알고리즘으로 다시 저장한다. 검증에 쓴 해시가 그대로일 때만 바꿔서, 그 사이 바뀐 비밀번호를 덮어쓰지 않는다
 - 알고리즘(BCrypt cost 10 / Argon2id 19MiB·2회·병렬 1)은 배포 서버에서 측정해 정한다
   - BCrypt를 고르면 비밀번호 최대 길이를 바이트로도 검사한다 (72바이트 제한, 한글은 24자에서 넘는다)
-- 해싱(회원가입, 로그인, 비밀번호 변경, 탈퇴 재확인)은 동시에 N개(초기값 CPU 코어 수)까지만 처리한다. 최대 1초 기다려도 자리가 없으면 `503 SERVICE_BUSY` + `Retry-After: 1`
+- 해싱 동시 처리 제한은 v1에 넣지 않는다. 로그인이 몰릴 때 다른 API가 느려지는지 먼저 재고, 깨지면 동시 N개 제한(넘치면 `503 SERVICE_BUSY` + `Retry-After: 1`)을 넣는다. 프론트는 503 + `Retry-After`를 처음부터 처리해 둔다
 - 로그인·회원가입 요청 제한은 core가 직접 한다. 넘으면 `429 TOO_MANY_REQUESTS`
 
 | 기준 | 목적 | 한도 |
@@ -318,4 +317,4 @@ realtime이 방 안에서 판단하는 것 (예시):
 - [ADR-0010: 서명 키는 Secrets Manager에 두고 메모리에만 올린다](../adr/0010-auth-signing-key-in-secrets-manager.md)
 - [ADR-0011: 게이트웨이 없이 core가 직접 요청 제한을 한다](../adr/0011-auth-no-gateway.md)
 - [ADR-0012: 비밀번호 해시 앞에 알고리즘 이름표를 붙인다](../adr/0012-auth-prefix-password-hash.md)
-- [ADR-0013: 비밀번호 해싱은 동시에 N개까지만 처리한다](../adr/0013-auth-limit-hashing-concurrency.md)
+- [ADR-0013: 비밀번호 해싱 동시 처리 제한은 측정한 뒤 넣는다](../adr/0013-auth-limit-hashing-concurrency.md)
