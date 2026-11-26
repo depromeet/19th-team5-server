@@ -18,8 +18,9 @@ var errFake = errors.New("fake error")
 
 const testParticipantID = "p1"
 
-// eventKey marks the context that a test passes with each event. The fake driver
-// and the send functions reject other contexts, so a lost context fails the test.
+// eventKey marks the context that a test passes with each event. The fake
+// driver and the send functions reject other contexts, so a lost context fails
+// the test.
 type eventKey struct{}
 
 func wantConnectionFailed(cause, problem string) protocol.ErrorMessage {
@@ -32,7 +33,7 @@ func wantConnectionFailed(cause, problem string) protocol.ErrorMessage {
 
 // fakeDriver is both the driver and the only connection it opens.
 type fakeDriver struct {
-	openErr, offerErr, answerErr, candidateErr, closeErr error
+	openErr, offerErr, answerErr, candidateErr, closeErr, subscribeErr error
 	// offerSDP, if set, is the SDP of every offer.
 	offerSDP string
 
@@ -40,6 +41,7 @@ type fakeDriver struct {
 	answers    []string
 	candidates []media.Candidate
 	closes     int
+	publishers []media.Conn
 }
 
 func checkContext(ctx context.Context) error {
@@ -101,6 +103,17 @@ func (d *fakeDriver) AddCandidate(ctx context.Context, c media.Candidate) error 
 	}
 	d.candidates = append(d.candidates, c)
 	return d.candidateErr
+}
+
+func (d *fakeDriver) Subscribe(ctx context.Context, publisher media.Conn) error {
+	if err := checkContext(ctx); err != nil {
+		return err
+	}
+	if d.subscribeErr != nil {
+		return d.subscribeErr
+	}
+	d.publishers = append(d.publishers, publisher)
+	return nil
 }
 
 type harness struct {

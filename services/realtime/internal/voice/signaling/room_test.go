@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"testing"
 	"testing/synctest"
 
@@ -23,10 +24,26 @@ type roomHarness struct {
 	sent   []sentMessage
 }
 
+// fakeDrivers opens the connection of each participant on its own fakeDriver.
+type fakeDrivers map[string]*fakeDriver
+
+func (d fakeDrivers) Open(ctx context.Context, participantID string) (media.Conn, error) {
+	if err := checkContext(ctx); err != nil {
+		return nil, err
+	}
+	return d[participantID], nil
+}
+
 // newRoomHarness creates a room on d. Tests call it inside a synctest bubble so
 // that they can wait for the room goroutine.
 func newRoomHarness(d *fakeDriver) *roomHarness {
-	h := &roomHarness{driver: d}
+	h := newMultiRoomHarness(d)
+	h.driver = d
+	return h
+}
+
+func newMultiRoomHarness(d media.Driver) *roomHarness {
+	h := &roomHarness{}
 	h.r = newRoom(
 		d,
 		func(ctx context.Context, participantID string, msg []byte) {
@@ -194,6 +211,55 @@ func TestRoomMarshalError(t *testing.T) {
 
 		if diff := cmp.Diff([]sentMessage(nil), h.sent); diff != "" {
 			t.Errorf("receive(join) with an unmarshalable offer sent messages diff (-want +got):\n%s", diff)
+		}
+	})
+}
+
+func TestRoomJoinAndLeaveRenegotiateOthers(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		// subscribeErr only drives the warning log path.
+		p1, p2 := &fakeDriver{subscribeErr: errFake}, &fakeDriver{}
+		h := newMultiRoomHarness(fakeDrivers{"p1": p1, "p2": p2})
+		h.receive(ctx, "p1", `{"type":"voice.join"}`)
+		h.receive(ctx, "p1", `{"type":"voice.answer","payload":{"sdp":"answer","offerId":1}}`)
+
+		h.receive(ctx, "p2", `{"type":"voice.join"}`)
+
+		if !slices.Equal(p2.publishers, []media.Conn{p1}) {
+			t.Errorf("after p2 joined, p2 subscribed to %v, want only p1", p2.publishers)
+		}
+		want := []sentMessage{
+			message(t, "p1", protocol.Offer{SDP: "sdp1", OfferID: 1}),
+			message(t, "p1", protocol.Offer{SDP: "sdp2", OfferID: 2}),
+			message(t, "p2", protocol.Offer{SDP: "sdp1", OfferID: 1}),
+		}
+		if diff := cmp.Diff(want, h.sent); diff != "" {
+			t.Fatalf("after p2 joined, sent messages diff (-want +got):\n%s", diff)
+		}
+
+		h.receive(ctx, "p1", `{"type":"voice.answer","payload":{"sdp":"answer","offerId":2}}`)
+		h.receive(ctx, "p2", `{"type":"voice.leave"}`)
+
+		want = append(want, message(t, "p1", protocol.Offer{SDP: "sdp3", OfferID: 3}))
+		if diff := cmp.Diff(want, h.sent); diff != "" {
+			t.Errorf("after p2 left, sent messages diff (-want +got):\n%s", diff)
+		}
+	})
+}
+
+func TestRoomJoinSkipsClosedNegotiation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		p1, p2 := &fakeDriver{answerErr: errFake}, &fakeDriver{}
+		h := newMultiRoomHarness(fakeDrivers{"p1": p1, "p2": p2})
+		h.receive(ctx, "p1", `{"type":"voice.join"}`)
+		h.receive(ctx, "p1", `{"type":"voice.answer","payload":{"sdp":"answer","offerId":1}}`)
+
+		h.receive(ctx, "p2", `{"type":"voice.join"}`)
+
+		if len(p1.publishers) != 0 || len(p2.publishers) != 0 {
+			t.Errorf("receive(p2 join) after p1's answer failed: p1 subscribed to %v and p2 to %v, want none", p1.publishers, p2.publishers)
 		}
 	})
 }

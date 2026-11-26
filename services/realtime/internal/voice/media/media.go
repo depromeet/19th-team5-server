@@ -15,7 +15,8 @@ type Driver interface {
 // Conn is a participant's WebRTC connection. It is used by one goroutine at a
 // time.
 type Conn interface {
-	// Close ends the connection. The Conn must not be used afterwards.
+	// Close ends the connection and the subscriptions it is part of. The Conn
+	// must not be used afterwards.
 	Close() error
 	// CreateOffer creates an SDP offer and sets it as the local description.
 	// The offer has all of the connection's ICE candidates.
@@ -24,6 +25,10 @@ type Conn interface {
 	ApplyAnswer(ctx context.Context, sdp string) error
 	// AddCandidate fails until [Conn.ApplyAnswer] has succeeded once.
 	AddCandidate(ctx context.Context, c Candidate) error
+	// Subscribe forwards the voice of publisher to this connection from its
+	// next negotiation on. publisher must come from the same Driver and be used
+	// by the same goroutine as this connection.
+	Subscribe(ctx context.Context, publisher Conn) error
 }
 
 // Candidate is a W3C RTCIceCandidateInit.

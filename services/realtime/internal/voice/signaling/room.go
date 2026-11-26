@@ -116,14 +116,33 @@ func (r *room) join(ctx context.Context, participantID string) {
 		r.post,
 		logger,
 	)
+	for _, other := range r.negotiations {
+		if other.state == stateClosed {
+			continue
+		}
+		subscribe(ctx, n, other)
+		subscribe(ctx, other, n)
+		other.renegotiationNeeded(ctx)
+	}
 	r.negotiations[participantID] = n
 	n.renegotiationNeeded(ctx)
 }
 
+func subscribe(ctx context.Context, subscriber, publisher *negotiation) {
+	if err := subscriber.conn.Subscribe(ctx, publisher.conn); err != nil {
+		subscriber.logger.WarnContext(ctx, "subscribe failed", "err", err)
+	}
+}
+
 func (r *room) leave(ctx context.Context, participantID string) {
-	if n, ok := r.negotiations[participantID]; ok {
-		n.leave(ctx)
-		delete(r.negotiations, participantID)
+	n, ok := r.negotiations[participantID]
+	if !ok {
+		return
+	}
+	n.leave(ctx)
+	delete(r.negotiations, participantID)
+	for _, other := range r.negotiations {
+		other.renegotiationNeeded(ctx)
 	}
 }
 
