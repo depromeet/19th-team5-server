@@ -4,15 +4,16 @@ package media
 
 import "context"
 
-// Engine opens one WebRTC connection per participant. The participant ID tells
-// the participant's voice apart from others when it is forwarded. If Open
-// fails, it leaves no connection behind. Otherwise the caller must call
-// [Conn.Close] when it is done with the Conn.
-type Engine interface {
+// Driver opens one WebRTC connection per participant. Open may be called
+// concurrently. The participant ID tells the participant's voice apart from
+// others when it is forwarded. If Open fails, it leaves no connection behind.
+// Otherwise the caller must call [Conn.Close] when it is done with the Conn.
+type Driver interface {
 	Open(ctx context.Context, participantID string) (Conn, error)
 }
 
-// Conn is a participant's WebRTC connection.
+// Conn is a participant's WebRTC connection. It is used by one goroutine at a
+// time.
 type Conn interface {
 	// Close ends the connection. The Conn must not be used afterwards.
 	Close() error

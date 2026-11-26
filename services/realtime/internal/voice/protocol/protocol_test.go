@@ -70,41 +70,42 @@ func TestParseInvalid(t *testing.T) {
 		in   string
 		want *ParseError
 	}{
-		{name: "unknown_type", in: `{"type":"voice.unknown"}`, want: &ParseError{Problem: "unknown message type"}},
-		{name: "duplicate_field", in: `{"type":"voice.answer","payload":{"sdp":"v=0","sdp":"v=1","offerId":1}}`, want: &ParseError{Problem: "duplicate field"}},
-		{name: "invalid_utf8", in: "{\"type\":\"voice.answer\",\"payload\":{\"sdp\":\"v=0\xff\",\"offerId\":1}}", want: &ParseError{Problem: "invalid JSON"}},
-		{name: "array_payload", in: `{"type":"voice.join","payload":[]}`, want: &ParseError{Problem: "payload is not an object"}},
+		{name: "unknown_type", in: `{"type":"voice.unknown"}`, want: &ParseError{Cause: causeUnknownType, Field: "/type"}},
+		{name: "duplicate_field", in: `{"type":"voice.answer","payload":{"sdp":"v=0","sdp":"v=1","offerId":1}}`, want: &ParseError{Cause: causeDuplicateField}},
+		{name: "invalid_utf8", in: "{\"type\":\"voice.answer\",\"payload\":{\"sdp\":\"v=0\xff\",\"offerId\":1}}", want: &ParseError{Cause: causeInvalidJSON}},
+		{name: "array_payload", in: `{"type":"voice.join","payload":[]}`, want: &ParseError{Cause: causePayloadNotObject, Field: "/payload"}},
 
-		{name: "answer_uppercase_field", in: `{"type":"voice.answer","payload":{"SDP":"v=0","offerId":1}}`, want: &ParseError{Problem: "voice.answer payload: missing sdp"}},
-		{name: "answer_missing_offerId", in: `{"type":"voice.answer","payload":{"sdp":"v=0"}}`, want: &ParseError{Problem: "voice.answer payload: offerId is less than 1"}},
-		{
-			name: "answer_string_offerId",
-			in:   `{"type":"voice.answer","payload":{"sdp":"v=0","offerId":"1"}}`,
-			want: &ParseError{Problem: "voice.answer payload: wrong field type", Metadata: map[string]string{"field": "/payload/offerId"}},
-		},
+		{name: "answer_uppercase_field", in: `{"type":"voice.answer","payload":{"SDP":"v=0","offerId":1}}`, want: &ParseError{Cause: causeMissingField, Field: "/payload/sdp"}},
+		{name: "answer_missing_offerId", in: `{"type":"voice.answer","payload":{"sdp":"v=0"}}`, want: &ParseError{Cause: causeInvalidFieldValue, Field: "/payload/offerId"}},
+		{name: "answer_string_offerId", in: `{"type":"voice.answer","payload":{"sdp":"v=0","offerId":"1"}}`, want: &ParseError{Cause: causeWrongFieldType, Field: "/payload/offerId"}},
 
-		{name: "candidate_missing_candidate", in: `{"type":"voice.candidate","payload":{"sdpMid":"0","sdpMLineIndex":0}}`, want: &ParseError{Problem: "voice.candidate payload: missing candidate"}},
-		{
-			name: "candidate_number_candidate",
-			in:   `{"type":"voice.candidate","payload":{"candidate":1,"sdpMid":"0"}}`,
-			want: &ParseError{Problem: "voice.candidate payload: wrong field type", Metadata: map[string]string{"field": "/payload/candidate"}},
-		},
+		{name: "candidate_missing_candidate", in: `{"type":"voice.candidate","payload":{"sdpMid":"0","sdpMLineIndex":0}}`, want: &ParseError{Cause: causeMissingField, Field: "/payload/candidate"}},
+		{name: "candidate_number_candidate", in: `{"type":"voice.candidate","payload":{"candidate":1,"sdpMid":"0"}}`, want: &ParseError{Cause: causeWrongFieldType, Field: "/payload/candidate"}},
 		{
 			name: "candidate_null_sdpMid_and_sdpMLineIndex",
 			in:   `{"type":"voice.candidate","payload":{"candidate":"candidate:1","sdpMid":null,"sdpMLineIndex":null}}`,
-			want: &ParseError{Problem: "voice.candidate payload: sdpMid and sdpMLineIndex are both null"},
+			want: &ParseError{Cause: causeMissingField, Field: "/payload/sdpMid"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := Parse([]byte(tt.in))
 			if diff := cmp.Diff(tt.want, err); diff != "" {
-				t.Fatalf("Parse(%q) error diff (-want +got):\n%s", tt.in, diff)
-			}
-			if got := err.Error(); got != tt.want.Problem {
-				t.Errorf("Parse(%q) error text = %q, want %q", tt.in, got, tt.want.Problem)
+				t.Errorf("Parse(%q) error diff (-want +got):\n%s", tt.in, diff)
 			}
 		})
+	}
+}
+
+func TestParseErrorErrorMessage(t *testing.T) {
+	e := &ParseError{Cause: causeMissingField, Field: "/payload/sdp"}
+	want := ErrorMessage{
+		Reason:   ErrorReasonInvalidMessage,
+		Message:  "a required field is missing; fix the message and send it again",
+		Metadata: map[string]string{"cause": "missing-field", "field": "/payload/sdp"},
+	}
+	if diff := cmp.Diff(want, e.ErrorMessage()); diff != "" {
+		t.Errorf("%#v.ErrorMessage() diff (-want +got):\n%s", e, diff)
 	}
 }
 
@@ -123,15 +124,10 @@ func TestMarshal(t *testing.T) {
 			name: "error_design_doc",
 			msg: ErrorMessage{
 				Reason:   ErrorReasonInvalidMessage,
-				Message:  "voice.answer payload: wrong field type; fix the message and send it again",
-				Metadata: map[string]string{"field": "/payload/offerId"},
+				Message:  "a field has the wrong type; fix the message and send it again",
+				Metadata: map[string]string{"cause": "wrong-field-type", "field": "/payload/offerId"},
 			},
-			want: `{"type":"voice.error","payload":{"reason":"INVALID_MESSAGE","message":"voice.answer payload: wrong field type; fix the message and send it again","metadata":{"field":"/payload/offerId"}}}`,
-		},
-		{
-			name: "error_without_metadata",
-			msg:  ErrorMessage{Reason: ErrorReasonInvalidMessage, Message: "m"},
-			want: `{"type":"voice.error","payload":{"reason":"INVALID_MESSAGE","message":"m"}}`,
+			want: `{"type":"voice.error","payload":{"reason":"INVALID_MESSAGE","message":"a field has the wrong type; fix the message and send it again","metadata":{"cause":"wrong-field-type","field":"/payload/offerId"}}}`,
 		},
 	}
 	for _, tt := range tests {

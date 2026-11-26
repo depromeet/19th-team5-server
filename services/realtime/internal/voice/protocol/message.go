@@ -40,9 +40,9 @@ type Leave struct{}
 type ErrorMessage struct {
 	Reason  ErrorReason `json:"reason"`
 	Message string      `json:"message"`
-	// Metadata holds the parts of the problem that differ between messages,
-	// such as the field at fault.
-	Metadata map[string]string `json:"metadata,omitempty"`
+	// Metadata holds the values that differ between errors with the same
+	// reason. Errors with the same reason have the same keys.
+	Metadata map[string]string `json:"metadata"`
 }
 
 // ErrorReason is why a request or the voice connection failed. New reasons may

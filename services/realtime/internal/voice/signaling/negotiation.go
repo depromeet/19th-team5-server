@@ -21,51 +21,34 @@ const (
 	stateClosed               negotiationState = "closed"
 )
 
+// negotiation runs the offers and answers of one participant's connection on
+// the room goroutine. The server makes every offer. An answer or a timeout for
+// any offer but the latest is ignored, and candidates that arrive before the
+// answer wait until it is applied. Once closed, it ignores every event.
 type negotiation struct {
-	participantID string
-	engine        media.Engine
-	send          func(context.Context, protocol.ServerMessage)
+	conn media.Conn
+	send func(context.Context, protocol.ServerMessage)
 	// post runs a function on the room goroutine. Answer timers call it on
 	// their own goroutines, even after the negotiation has closed.
 	post   func(func())
 	logger *slog.Logger
 
-	conn              media.Conn
 	state             negotiationState
 	offerID           int
 	pendingCandidates []media.Candidate
 }
 
-func newNegotiation(
-	participantID string,
-	engine media.Engine,
-	send func(context.Context, protocol.ServerMessage),
-	post func(func()),
-	logger *slog.Logger,
-) *negotiation {
+func newNegotiation(conn media.Conn, send func(context.Context, protocol.ServerMessage), post func(func()), logger *slog.Logger) *negotiation {
 	return &negotiation{
-		participantID: participantID,
-		engine:        engine,
-		send:          send,
-		post:          post,
-		logger:        logger.With("participantId", participantID),
+		conn:   conn,
+		send:   send,
+		post:   post,
+		logger: logger,
+		state:  stateStable,
 	}
 }
 
-// start opens the connection and sends the first offer. It must be called once,
-// before any other event.
-func (n *negotiation) start(ctx context.Context) {
-	conn, err := n.engine.Open(ctx, n.participantID)
-	if err != nil {
-		n.logger.WarnContext(ctx, "open connection failed", "err", err)
-		n.state = stateClosed
-		n.sendConnectionFailed(ctx, "the server could not open the voice connection")
-		return
-	}
-	n.conn = conn
-	n.sendOffer(ctx)
-}
-
+// renegotiationNeeded sends a new offer now, or after the answer that n awaits.
 func (n *negotiation) renegotiationNeeded(ctx context.Context) {
 	switch n.state {
 	case stateStable:
@@ -90,7 +73,7 @@ func (n *negotiation) receiveAnswer(ctx context.Context, a protocol.Answer) {
 	}
 	if err := n.conn.ApplyAnswer(ctx, a.SDP); err != nil {
 		n.logger.WarnContext(ctx, "apply answer failed", "offerId", a.OfferID, "err", err)
-		n.fail(ctx, "the server could not apply voice.answer")
+		n.fail(ctx, "apply-answer", "the server could not apply voice.answer")
 		return
 	}
 	for _, c := range n.pendingCandidates {
@@ -109,7 +92,7 @@ func (n *negotiation) timeout(ctx context.Context, offerID int) {
 		return
 	}
 	n.logger.WarnContext(ctx, "answer timed out", "offerId", offerID)
-	n.fail(ctx, "no voice.answer arrived in time")
+	n.fail(ctx, "answer-timeout", "no voice.answer arrived in time")
 }
 
 func (n *negotiation) leave(ctx context.Context) {
@@ -119,6 +102,7 @@ func (n *negotiation) leave(ctx context.Context) {
 	n.close(ctx)
 }
 
+// awaits reports whether n is waiting for the answer to offerID.
 func (n *negotiation) awaits(offerID int) bool {
 	return (n.state == stateAwaitingAnswer || n.state == stateRenegotiationPending) && offerID == n.offerID
 }
@@ -129,7 +113,7 @@ func (n *negotiation) sendOffer(ctx context.Context) {
 	sdp, err := n.conn.CreateOffer(ctx)
 	if err != nil {
 		n.logger.WarnContext(ctx, "create offer failed", "offerId", offerID, "err", err)
-		n.fail(ctx, "the server could not create an offer")
+		n.fail(ctx, "create-offer", "the server could not create an offer")
 		return
 	}
 	n.state = stateAwaitingAnswer
@@ -140,16 +124,19 @@ func (n *negotiation) sendOffer(ctx context.Context) {
 	n.send(ctx, protocol.Offer{SDP: sdp, OfferID: offerID})
 }
 
-func (n *negotiation) fail(ctx context.Context, problem string) {
+func (n *negotiation) fail(ctx context.Context, cause, problem string) {
 	n.close(ctx)
-	n.sendConnectionFailed(ctx, problem)
+	n.send(ctx, connectionFailed(cause, problem))
 }
 
-func (n *negotiation) sendConnectionFailed(ctx context.Context, problem string) {
-	n.send(ctx, protocol.ErrorMessage{
-		Reason:  protocol.ErrorReasonConnectionFailed,
-		Message: problem + "; create a new RTCPeerConnection and send voice.join",
-	})
+// connectionFailed returns a CONNECTION_FAILED error. cause names the failed
+// step in the metadata, and problem describes it in the message.
+func connectionFailed(cause, problem string) protocol.ErrorMessage {
+	return protocol.ErrorMessage{
+		Reason:   protocol.ErrorReasonConnectionFailed,
+		Message:  problem + "; create a new RTCPeerConnection and send voice.join",
+		Metadata: map[string]string{"cause": cause},
+	}
 }
 
 func (n *negotiation) addCandidate(ctx context.Context, c media.Candidate) {

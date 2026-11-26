@@ -18,20 +18,23 @@ var errFake = errors.New("fake error")
 
 const testParticipantID = "p1"
 
-// eventKey marks the context that a test passes with each event. The fake engine
-// and the send function reject other contexts, so a lost context fails the test.
+// eventKey marks the context that a test passes with each event. The fake driver
+// and the send functions reject other contexts, so a lost context fails the test.
 type eventKey struct{}
 
-func connectionFailed(problem string) protocol.ErrorMessage {
+func wantConnectionFailed(cause, problem string) protocol.ErrorMessage {
 	return protocol.ErrorMessage{
-		Reason:  protocol.ErrorReasonConnectionFailed,
-		Message: problem + "; create a new RTCPeerConnection and send voice.join",
+		Reason:   protocol.ErrorReasonConnectionFailed,
+		Message:  problem + "; create a new RTCPeerConnection and send voice.join",
+		Metadata: map[string]string{"cause": cause},
 	}
 }
 
-// fakeEngine is both the engine and the only connection it opens.
-type fakeEngine struct {
+// fakeDriver is both the driver and the only connection it opens.
+type fakeDriver struct {
 	openErr, offerErr, answerErr, candidateErr, closeErr error
+	// offerSDP, if set, is the SDP of every offer.
+	offerSDP string
 
 	offers     int
 	answers    []string
@@ -46,60 +49,63 @@ func checkContext(ctx context.Context) error {
 	return nil
 }
 
-func (e *fakeEngine) Open(ctx context.Context, participantID string) (media.Conn, error) {
+func (d *fakeDriver) Open(ctx context.Context, participantID string) (media.Conn, error) {
 	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}
 	if participantID != testParticipantID {
 		return nil, fmt.Errorf("unexpected participant %q", participantID)
 	}
-	if e.openErr != nil {
-		return nil, e.openErr
+	if d.openErr != nil {
+		return nil, d.openErr
 	}
-	return e, nil
+	return d, nil
 }
 
-func (e *fakeEngine) Close() error {
-	e.closes++
-	return e.closeErr
+func (d *fakeDriver) Close() error {
+	d.closes++
+	return d.closeErr
 }
 
-func (e *fakeEngine) CreateOffer(ctx context.Context) (string, error) {
-	if e.offerErr != nil {
-		return "", e.offerErr
+func (d *fakeDriver) CreateOffer(ctx context.Context) (string, error) {
+	if d.offerErr != nil {
+		return "", d.offerErr
 	}
 	if err := checkContext(ctx); err != nil {
 		return "", err
 	}
-	e.offers++
-	return fmt.Sprintf("sdp%d", e.offers), nil
+	d.offers++
+	if d.offerSDP != "" {
+		return d.offerSDP, nil
+	}
+	return fmt.Sprintf("sdp%d", d.offers), nil
 }
 
-func (e *fakeEngine) ApplyAnswer(ctx context.Context, sdp string) error {
+func (d *fakeDriver) ApplyAnswer(ctx context.Context, sdp string) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	if e.answerErr != nil {
-		return e.answerErr
+	if d.answerErr != nil {
+		return d.answerErr
 	}
-	e.answers = append(e.answers, sdp)
+	d.answers = append(d.answers, sdp)
 	return nil
 }
 
-func (e *fakeEngine) AddCandidate(ctx context.Context, c media.Candidate) error {
+func (d *fakeDriver) AddCandidate(ctx context.Context, c media.Candidate) error {
 	if err := checkContext(ctx); err != nil {
 		return err
 	}
-	if len(e.answers) == 0 {
+	if len(d.answers) == 0 {
 		return errFake
 	}
-	e.candidates = append(e.candidates, c)
-	return e.candidateErr
+	d.candidates = append(d.candidates, c)
+	return d.candidateErr
 }
 
 type harness struct {
 	n      *negotiation
-	engine *fakeEngine
+	driver *fakeDriver
 	sent   []protocol.ServerMessage
 	posted chan func()
 }
@@ -108,14 +114,13 @@ func eventContext(t *testing.T) context.Context {
 	return context.WithValue(t.Context(), eventKey{}, true)
 }
 
-// startNegotiation creates and starts a negotiation with e. Tests that send an
-// offer call it inside a synctest bubble so that the answer timer uses the
-// bubble's fake clock.
-func startNegotiation(ctx context.Context, e *fakeEngine) *harness {
-	h := &harness{engine: e, posted: make(chan func())}
+// startNegotiation creates a negotiation on d and sends the first offer. Tests
+// that send an offer call it inside a synctest bubble so that the answer timer
+// uses the bubble's fake clock.
+func startNegotiation(ctx context.Context, d *fakeDriver) *harness {
+	h := &harness{driver: d, posted: make(chan func())}
 	h.n = newNegotiation(
-		testParticipantID,
-		e,
+		d,
 		func(ctx context.Context, msg protocol.ServerMessage) {
 			if ctx.Value(eventKey{}) != nil {
 				h.sent = append(h.sent, msg)
@@ -124,55 +129,42 @@ func startNegotiation(ctx context.Context, e *fakeEngine) *harness {
 		func(f func()) { h.posted <- f },
 		slog.New(slog.DiscardHandler),
 	)
-	h.n.start(ctx)
+	h.n.renegotiationNeeded(ctx)
 	return h
 }
 
-func TestNegotiationStartOpenError(t *testing.T) {
+func TestNegotiationCreateOfferError(t *testing.T) {
 	ctx := eventContext(t)
-	h := startNegotiation(ctx, &fakeEngine{openErr: errFake})
+	h := startNegotiation(ctx, &fakeDriver{offerErr: errFake})
 
-	want := []protocol.ServerMessage{connectionFailed("the server could not open the voice connection")}
+	want := []protocol.ServerMessage{wantConnectionFailed("create-offer", "the server could not create an offer")}
 	if diff := cmp.Diff(want, h.sent); diff != "" {
-		t.Errorf("start() sent messages diff (-want +got):\n%s", diff)
+		t.Errorf("renegotiationNeeded() sent messages diff (-want +got):\n%s", diff)
 	}
 	if h.n.state != stateClosed {
-		t.Errorf("start() state = %q, want %q", h.n.state, stateClosed)
+		t.Errorf("renegotiationNeeded() state = %q, want %q", h.n.state, stateClosed)
 	}
-}
-
-func TestNegotiationStartCreateOfferError(t *testing.T) {
-	ctx := eventContext(t)
-	h := startNegotiation(ctx, &fakeEngine{offerErr: errFake})
-
-	want := []protocol.ServerMessage{connectionFailed("the server could not create an offer")}
-	if diff := cmp.Diff(want, h.sent); diff != "" {
-		t.Errorf("start() sent messages diff (-want +got):\n%s", diff)
-	}
-	if h.n.state != stateClosed {
-		t.Errorf("start() state = %q, want %q", h.n.state, stateClosed)
-	}
-	if h.engine.closes != 1 {
-		t.Errorf("start() closed the connection %d times, want 1", h.engine.closes)
+	if h.driver.closes != 1 {
+		t.Errorf("renegotiationNeeded() closed the connection %d times, want 1", h.driver.closes)
 	}
 }
 
 func TestNegotiationAddsPendingCandidatesAfterAnswer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := eventContext(t)
-		h := startNegotiation(ctx, &fakeEngine{})
+		h := startNegotiation(ctx, &fakeDriver{})
 		h.n.receiveCandidate(ctx, protocol.Candidate{Candidate: "c1"})
 
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer", OfferID: 1})
 
 		want := []media.Candidate{{Candidate: "c1"}}
-		if diff := cmp.Diff(want, h.engine.candidates); diff != "" {
+		if diff := cmp.Diff(want, h.driver.candidates); diff != "" {
 			t.Fatalf("receiveAnswer(offerId 1) added candidates diff (-want +got):\n%s", diff)
 		}
 
 		h.n.renegotiationNeeded(ctx)
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer", OfferID: 2})
-		if diff := cmp.Diff(want, h.engine.candidates); diff != "" {
+		if diff := cmp.Diff(want, h.driver.candidates); diff != "" {
 			t.Errorf("receiveAnswer(offerId 2) added candidates diff (-want +got):\n%s", diff)
 		}
 	})
@@ -182,18 +174,18 @@ func TestNegotiationStableState(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// candidateErr only drives the warning log path.
 		ctx := eventContext(t)
-		h := startNegotiation(ctx, &fakeEngine{candidateErr: errFake})
+		h := startNegotiation(ctx, &fakeDriver{candidateErr: errFake})
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer", OfferID: 1})
 
 		h.n.receiveCandidate(ctx, protocol.Candidate{Candidate: "c1"})
 
 		want := []media.Candidate{{Candidate: "c1"}}
-		if diff := cmp.Diff(want, h.engine.candidates); diff != "" {
+		if diff := cmp.Diff(want, h.driver.candidates); diff != "" {
 			t.Errorf("receiveCandidate(c1) added candidates diff (-want +got):\n%s", diff)
 		}
 
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer", OfferID: 1})
-		if diff := cmp.Diff([]string{"answer"}, h.engine.answers); diff != "" {
+		if diff := cmp.Diff([]string{"answer"}, h.driver.answers); diff != "" {
 			t.Errorf("repeated receiveAnswer(offerId 1) applied answers diff (-want +got):\n%s", diff)
 		}
 
@@ -211,12 +203,12 @@ func TestNegotiationStableState(t *testing.T) {
 func TestNegotiationRenegotiationPending(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := eventContext(t)
-		h := startNegotiation(ctx, &fakeEngine{})
+		h := startNegotiation(ctx, &fakeDriver{})
 		h.n.renegotiationNeeded(ctx)
 
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer1", OfferID: 1})
 
-		if diff := cmp.Diff([]string{"answer1"}, h.engine.answers); diff != "" {
+		if diff := cmp.Diff([]string{"answer1"}, h.driver.answers); diff != "" {
 			t.Errorf("receiveAnswer(offerId 1) applied answers diff (-want +got):\n%s", diff)
 		}
 		want := []protocol.ServerMessage{
@@ -231,7 +223,7 @@ func TestNegotiationRenegotiationPending(t *testing.T) {
 		}
 
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer1", OfferID: 1})
-		if diff := cmp.Diff([]string{"answer1"}, h.engine.answers); diff != "" {
+		if diff := cmp.Diff([]string{"answer1"}, h.driver.answers); diff != "" {
 			t.Errorf("repeated receiveAnswer(offerId 1) applied answers diff (-want +got):\n%s", diff)
 		}
 		if h.n.state != stateAwaitingAnswer {
@@ -243,13 +235,13 @@ func TestNegotiationRenegotiationPending(t *testing.T) {
 func TestNegotiationApplyAnswerError(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := eventContext(t)
-		h := startNegotiation(ctx, &fakeEngine{answerErr: errFake})
+		h := startNegotiation(ctx, &fakeDriver{answerErr: errFake})
 
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer", OfferID: 1})
 
 		want := []protocol.ServerMessage{
 			protocol.Offer{SDP: "sdp1", OfferID: 1},
-			connectionFailed("the server could not apply voice.answer"),
+			wantConnectionFailed("apply-answer", "the server could not apply voice.answer"),
 		}
 		if diff := cmp.Diff(want, h.sent); diff != "" {
 			t.Errorf("receiveAnswer(offerId 1) sent messages diff (-want +got):\n%s", diff)
@@ -263,7 +255,7 @@ func TestNegotiationApplyAnswerError(t *testing.T) {
 func TestNegotiationTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := eventContext(t)
-		h := startNegotiation(ctx, &fakeEngine{})
+		h := startNegotiation(ctx, &fakeDriver{})
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer", OfferID: 1})
 		// Sending offer 2 half a timeout later makes the two timers fire apart.
 		time.Sleep(answerTimeout / 2)
@@ -285,7 +277,7 @@ func TestNegotiationTimeout(t *testing.T) {
 
 		awaitedOfferTimeout := <-h.posted
 		awaitedOfferTimeout()
-		want := []protocol.ServerMessage{offers[0], offers[1], connectionFailed("no voice.answer arrived in time")}
+		want := []protocol.ServerMessage{offers[0], offers[1], wantConnectionFailed("answer-timeout", "no voice.answer arrived in time")}
 		if diff := cmp.Diff(want, h.sent); diff != "" {
 			t.Errorf("after the timer of offer 2, sent messages diff (-want +got):\n%s", diff)
 		}
@@ -299,7 +291,7 @@ func TestNegotiationLeave(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// closeErr only drives the warning log path.
 		ctx := eventContext(t)
-		h := startNegotiation(ctx, &fakeEngine{closeErr: errFake})
+		h := startNegotiation(ctx, &fakeDriver{closeErr: errFake})
 		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer", OfferID: 1})
 
 		h.n.leave(ctx)
@@ -314,10 +306,10 @@ func TestNegotiationLeave(t *testing.T) {
 		if diff := cmp.Diff([]protocol.ServerMessage{protocol.Offer{SDP: "sdp1", OfferID: 1}}, h.sent); diff != "" {
 			t.Errorf("events after leave() sent messages diff (-want +got):\n%s", diff)
 		}
-		if h.engine.closes != 1 {
-			t.Errorf("leave() twice closed the connection %d times, want 1", h.engine.closes)
+		if h.driver.closes != 1 {
+			t.Errorf("leave() twice closed the connection %d times, want 1", h.driver.closes)
 		}
-		if diff := cmp.Diff([]media.Candidate(nil), h.engine.candidates); diff != "" {
+		if diff := cmp.Diff([]media.Candidate(nil), h.driver.candidates); diff != "" {
 			t.Errorf("receiveCandidate(c1) after leave() added candidates diff (-want +got):\n%s", diff)
 		}
 		if h.n.state != stateClosed {
