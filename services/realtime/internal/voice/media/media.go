@@ -18,6 +18,7 @@ type Conn interface {
 	// Close ends the connection. The Conn must not be used afterwards.
 	Close() error
 	// CreateOffer creates an SDP offer and sets it as the local description.
+	// The offer has all of the connection's ICE candidates.
 	CreateOffer(ctx context.Context) (sdp string, err error)
 	// ApplyAnswer sets sdp, an SDP answer, as the remote description.
 	ApplyAnswer(ctx context.Context, sdp string) error
