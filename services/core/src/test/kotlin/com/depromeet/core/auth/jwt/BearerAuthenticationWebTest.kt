@@ -3,6 +3,12 @@ package com.depromeet.core.auth.jwt
 import com.depromeet.core.global.config.ClockConfig
 import com.depromeet.core.global.security.ProblemSecurityHandler
 import com.depromeet.core.global.security.SecurityConfig
+import com.nimbusds.jose.JOSEObjectType
+import com.nimbusds.jose.JWSAlgorithm
+import com.nimbusds.jose.JWSHeader
+import com.nimbusds.jose.crypto.RSASSASigner
+import com.nimbusds.jwt.JWTClaimsSet
+import com.nimbusds.jwt.SignedJWT
 import org.hamcrest.Matchers.containsString
 import org.hamcrest.Matchers.not
 import org.junit.jupiter.api.Test
@@ -17,6 +23,10 @@ import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.get
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RestController
+import java.time.Duration
+import java.time.Instant
+import java.util.Date
+import java.util.UUID
 
 @WebMvcTest(controllers = [JwksController::class, BearerAuthenticationWebTest.MeController::class])
 @Import(
@@ -35,13 +45,16 @@ class BearerAuthenticationWebTest {
     @Autowired
     lateinit var issuer: AccessTokenIssuer
 
+    @Autowired
+    lateinit var signingKeys: SigningKeys
+
     @Test
-    fun `토큰이 없으면 401 UNAUTHORIZED와 WWW-Authenticate Bearer로 응답한다`() {
+    fun `토큰이 없으면 401 INVALID_TOKEN과 WWW-Authenticate Bearer로 응답한다`() {
         mockMvc.get("/test/me").andExpect {
             status { isUnauthorized() }
             header { string(HttpHeaders.WWW_AUTHENTICATE, containsString("Bearer")) }
             jsonPath("$.status") { value(401) }
-            jsonPath("$.code") { value("UNAUTHORIZED") }
+            jsonPath("$.code") { value("INVALID_TOKEN") }
         }
     }
 
@@ -53,7 +66,39 @@ class BearerAuthenticationWebTest {
             }.andExpect {
                 status { isUnauthorized() }
                 header { string(HttpHeaders.WWW_AUTHENTICATE, containsString("error=\"invalid_token\"")) }
-                jsonPath("$.code") { value("UNAUTHORIZED") }
+                jsonPath("$.code") { value("INVALID_TOKEN") }
+            }
+    }
+
+    @Test
+    fun `만료된 토큰은 401 TOKEN_EXPIRED로 응답한다`() {
+        val now = Instant.now()
+        val claims =
+            JWTClaimsSet
+                .Builder()
+                .issuer("http://localhost:8080")
+                .audience("http://localhost:8080")
+                .subject("123")
+                .claim("client_id", "web")
+                .claim("roles", listOf("MEMBER"))
+                .issueTime(Date.from(now.minus(Duration.ofMinutes(32))))
+                .expirationTime(Date.from(now.minus(Duration.ofMinutes(2))))
+                .jwtID(UUID.randomUUID().toString())
+                .build()
+        val header =
+            JWSHeader
+                .Builder(JWSAlgorithm.RS256)
+                .type(JOSEObjectType("at+jwt"))
+                .keyID(signingKeys.signing.keyID)
+                .build()
+        val expired = SignedJWT(header, claims).apply { sign(RSASSASigner(signingKeys.signing)) }.serialize()
+
+        mockMvc
+            .get("/test/me") {
+                header(HttpHeaders.AUTHORIZATION, "Bearer $expired")
+            }.andExpect {
+                status { isUnauthorized() }
+                jsonPath("$.code") { value("TOKEN_EXPIRED") }
             }
     }
 

@@ -4,6 +4,8 @@ import com.depromeet.core.auth.jwt.EphemeralSigningKeySource
 import com.depromeet.core.auth.jwt.JwtConfig
 import com.depromeet.core.global.security.ProblemSecurityHandler
 import com.depromeet.core.global.security.SecurityConfig
+import jakarta.validation.Valid
+import jakarta.validation.constraints.Email
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest
@@ -44,14 +46,28 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    fun `잘못된 JSON은 400 INVALID_INPUT으로 응답한다`() {
+    fun `잘못된 JSON은 400 INVALID_REQUEST로 응답한다`() {
         mockMvc
             .post("/test/body") {
                 contentType = MediaType.APPLICATION_JSON
                 content = "{"
             }.andExpect {
                 status { isBadRequest() }
-                jsonPath("$.code") { value("INVALID_INPUT") }
+                jsonPath("$.code") { value("INVALID_REQUEST") }
+            }
+    }
+
+    @Test
+    fun `검증에 실패하면 400 INVALID_REQUEST와 틀린 칸을 invalidParams로 응답한다`() {
+        mockMvc
+            .post("/test/validated") {
+                contentType = MediaType.APPLICATION_JSON
+                content = """{"email":"not-email"}"""
+            }.andExpect {
+                status { isBadRequest() }
+                jsonPath("$.code") { value("INVALID_REQUEST") }
+                jsonPath("$.invalidParams[0].name") { value("email") }
+                jsonPath("$.invalidParams[0].reason") { exists() }
             }
     }
 
@@ -83,11 +99,22 @@ class GlobalExceptionHandlerTest {
         ) {
         }
 
+        @PostMapping("/test/validated")
+        fun validated(
+            @Valid @RequestBody payload: EmailPayload,
+        ) {
+        }
+
         @GetMapping("/test/unexpected")
         fun unexpected(): Unit = throw IllegalStateException("DB 비밀번호가 틀렸습니다")
 
         data class Payload(
             val value: String,
+        )
+
+        data class EmailPayload(
+            @field:Email
+            val email: String?,
         )
     }
 }

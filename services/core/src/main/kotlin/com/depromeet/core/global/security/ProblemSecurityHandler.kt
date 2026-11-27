@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse
 import org.springframework.http.MediaType
 import org.springframework.security.access.AccessDeniedException
 import org.springframework.security.core.AuthenticationException
+import org.springframework.security.oauth2.jwt.JwtValidationException
 import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint
 import org.springframework.security.oauth2.server.resource.web.access.BearerTokenAccessDeniedHandler
 import org.springframework.security.web.AuthenticationEntryPoint
@@ -32,7 +33,7 @@ class ProblemSecurityHandler(
         authException: AuthenticationException,
     ) {
         bearerEntryPoint.commence(request, response, authException)
-        write(request, response, ErrorCode.UNAUTHORIZED)
+        write(request, response, if (isExpired(authException)) ErrorCode.TOKEN_EXPIRED else ErrorCode.INVALID_TOKEN)
     }
 
     override fun handle(
@@ -43,6 +44,15 @@ class ProblemSecurityHandler(
         bearerDeniedHandler.handle(request, response, accessDeniedException)
         write(request, response, ErrorCode.FORBIDDEN)
     }
+
+    /**
+     * 만료만 TOKEN_EXPIRED로 나눈다. 프론트는 이 코드를 받으면 재발급 후 다시 요청한다.
+     * 만료 판단은 Spring의 JwtTimestampValidator가 남기는 오류 설명("Jwt expired at ...")으로 한다.
+     */
+    private fun isExpired(e: Throwable): Boolean =
+        generateSequence(e) { it.cause }
+            .filterIsInstance<JwtValidationException>()
+            .any { ex -> ex.errors.any { it.description?.startsWith("Jwt expired") == true } }
 
     private fun write(
         request: HttpServletRequest,
