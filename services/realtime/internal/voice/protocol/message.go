@@ -33,6 +33,9 @@ type Candidate struct {
 	UsernameFragment *string `json:"usernameFragment"`
 }
 
+// RestartICE asks for an offer that restarts ICE.
+type RestartICE struct{}
+
 // SetMuted sets whether the client's voice is muted.
 type SetMuted struct {
 	Muted bool `json:"muted"`
@@ -69,11 +72,12 @@ const (
 )
 
 // isClientMessage ensures that only client messages can be a ClientMessage.
-func (Join) isClientMessage()      {}
-func (Answer) isClientMessage()    {}
-func (Candidate) isClientMessage() {}
-func (SetMuted) isClientMessage()  {}
-func (Leave) isClientMessage()     {}
+func (Join) isClientMessage()       {}
+func (Answer) isClientMessage()     {}
+func (Candidate) isClientMessage()  {}
+func (RestartICE) isClientMessage() {}
+func (SetMuted) isClientMessage()   {}
+func (Leave) isClientMessage()      {}
 
 // messageType gives the type of a server message and ensures that only server
 // messages can be a ServerMessage.

@@ -8,14 +8,15 @@ import (
 )
 
 const (
-	typeJoin      = "voice.join"
-	typeOffer     = "voice.offer"
-	typeAnswer    = "voice.answer"
-	typeCandidate = "voice.candidate"
-	typeSetMuted  = "voice.setMuted"
-	typeMuted     = "voice.muted"
-	typeLeave     = "voice.leave"
-	typeError     = "voice.error"
+	typeJoin       = "voice.join"
+	typeOffer      = "voice.offer"
+	typeAnswer     = "voice.answer"
+	typeCandidate  = "voice.candidate"
+	typeRestartICE = "voice.restartIce"
+	typeSetMuted   = "voice.setMuted"
+	typeMuted      = "voice.muted"
+	typeLeave      = "voice.leave"
+	typeError      = "voice.error"
 )
 
 type clientEnvelope struct {
@@ -95,6 +96,8 @@ func Parse(data []byte) (ClientMessage, error) {
 		return parseAnswer(payload)
 	case typeCandidate:
 		return parseCandidate(payload)
+	case typeRestartICE:
+		return RestartICE{}, nil
 	case typeSetMuted:
 		return parseSetMuted(payload)
 	case typeLeave:
