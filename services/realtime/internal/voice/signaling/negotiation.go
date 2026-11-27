@@ -34,7 +34,9 @@ type negotiation struct {
 	logger *slog.Logger
 
 	state             negotiationState
+	connected         bool
 	offerID           int
+	pendingOffer      string
 	pendingCandidates []media.Candidate
 
 	// muted is whether the participant's voice is muted. It is not part of the
@@ -44,11 +46,12 @@ type negotiation struct {
 
 func newNegotiation(conn media.Conn, send func(context.Context, protocol.ServerMessage), post func(func()), logger *slog.Logger) *negotiation {
 	return &negotiation{
-		conn:   conn,
-		send:   send,
-		post:   post,
-		logger: logger,
-		state:  stateStable,
+		conn:      conn,
+		send:      send,
+		post:      post,
+		logger:    logger,
+		state:     stateStable,
+		connected: true,
 	}
 }
 
@@ -95,6 +98,7 @@ func (n *negotiation) receiveAnswer(ctx context.Context, a protocol.Answer) {
 		n.addCandidate(ctx, c)
 	}
 	n.pendingCandidates = nil
+	n.pendingOffer = ""
 	if n.state == stateRenegotiationPending {
 		n.sendOffer(ctx)
 		return
@@ -103,11 +107,28 @@ func (n *negotiation) receiveAnswer(ctx context.Context, a protocol.Answer) {
 }
 
 func (n *negotiation) timeout(ctx context.Context, offerID int) {
-	if !n.awaits(offerID) {
+	if !n.awaits(offerID) || !n.connected {
 		return
 	}
 	n.logger.WarnContext(ctx, "answer timed out", "offerId", offerID)
 	n.fail(ctx, "answer-timeout", "no voice.answer arrived in time")
+}
+
+func (n *negotiation) disconnect() {
+	if n.state == stateClosed {
+		return
+	}
+	n.connected = false
+}
+
+func (n *negotiation) reconnect(ctx context.Context) {
+	if n.state == stateClosed {
+		return
+	}
+	n.connected = true
+	if n.state == stateAwaitingAnswer || n.state == stateRenegotiationPending {
+		n.dispatchOffer(ctx, n.pendingOffer)
+	}
 }
 
 func (n *negotiation) leave(ctx context.Context) {
@@ -123,15 +144,20 @@ func (n *negotiation) awaits(offerID int) bool {
 }
 
 func (n *negotiation) sendOffer(ctx context.Context) {
-	n.offerID++
-	offerID := n.offerID
 	sdp, err := n.conn.CreateOffer(ctx)
 	if err != nil {
-		n.logger.WarnContext(ctx, "create offer failed", "offerId", offerID, "err", err)
+		n.logger.WarnContext(ctx, "create offer failed", "offerId", n.offerID+1, "err", err)
 		n.fail(ctx, "create-offer", "the server could not create an offer")
 		return
 	}
 	n.state = stateAwaitingAnswer
+	n.pendingOffer = sdp
+	n.dispatchOffer(ctx, sdp)
+}
+
+func (n *negotiation) dispatchOffer(ctx context.Context, sdp string) {
+	n.offerID++
+	offerID := n.offerID
 	timerCtx := context.WithoutCancel(ctx)
 	time.AfterFunc(answerTimeout, func() {
 		n.post(func() { n.timeout(timerCtx, offerID) })
@@ -164,5 +190,6 @@ func (n *negotiation) close(ctx context.Context) {
 	if err := n.conn.Close(); err != nil {
 		n.logger.WarnContext(ctx, "close connection failed", "err", err)
 	}
+	n.pendingOffer = ""
 	n.state = stateClosed
 }

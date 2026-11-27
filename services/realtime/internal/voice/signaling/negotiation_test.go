@@ -350,3 +350,59 @@ func TestNegotiationLeave(t *testing.T) {
 		}
 	})
 }
+
+func TestNegotiationDisconnectAndReconnectResendsPendingOffer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		h := startNegotiation(ctx, &fakeDriver{})
+
+		h.n.disconnect()
+
+		// Timeout while disconnected must be ignored and keep the connection open.
+		disconnectedTimeout := <-h.posted
+		disconnectedTimeout()
+		if h.n.state != stateAwaitingAnswer {
+			t.Fatalf("after timeout while disconnected, state = %q, want %q", h.n.state, stateAwaitingAnswer)
+		}
+
+		// Reconnecting resends the same SDP with a new offerId and starts a new timer.
+		h.n.reconnect(ctx)
+		want := []protocol.ServerMessage{
+			protocol.Offer{SDP: "sdp1", OfferID: 1},
+			protocol.Offer{SDP: "sdp1", OfferID: 2},
+		}
+		if diff := cmp.Diff(want, h.sent); diff != "" {
+			t.Errorf("reconnect() sent messages diff (-want +got):\n%s", diff)
+		}
+		if h.driver.offers != 1 {
+			t.Errorf("reconnect() called CreateOffer %d times, want 1", h.driver.offers)
+		}
+
+		// The new timer closes the connection if no answer arrives.
+		reconnectedTimeout := <-h.posted
+		reconnectedTimeout()
+		if h.n.state != stateClosed {
+			t.Errorf("after reconnected offer timed out, state = %q, want %q", h.n.state, stateClosed)
+		}
+	})
+}
+
+func TestNegotiationReconnectInStableAndClosedSendsNothing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		h := startNegotiation(ctx, &fakeDriver{})
+		h.n.receiveAnswer(ctx, protocol.Answer{SDP: "answer", OfferID: 1})
+
+		h.n.disconnect()
+		h.n.reconnect(ctx)
+
+		h.n.leave(ctx)
+		h.n.disconnect()
+		h.n.reconnect(ctx)
+
+		want := []protocol.ServerMessage{protocol.Offer{SDP: "sdp1", OfferID: 1}}
+		if diff := cmp.Diff(want, h.sent); diff != "" {
+			t.Errorf("reconnect() in stable and closed sent messages diff (-want +got):\n%s", diff)
+		}
+	})
+}
