@@ -1,6 +1,6 @@
 # 음성 통화 설계
 
-담당: happyhun | 최종 갱신: 2026-11-26
+담당: happyhun | 최종 갱신: 2026-11-27
 
 ## 개요
 
@@ -91,7 +91,7 @@ sequenceDiagram
 
 기존 참가자가 여럿이면 ②와 ④를 각자와 주고받는다.
 
-같은 계정이 `voice.join`을 또 보내면 기존 연결을 닫고 새 연결로 바꾼다. 입장하지 않은 참가자가 보낸 `voice.answer`, `voice.candidate`, `voice.leave`는 무시한다.
+같은 계정이 `voice.join`을 또 보내면 기존 연결을 닫고 새 연결로 바꾼다. 입장하지 않은 참가자가 보낸 `voice.answer`, `voice.candidate`, `voice.setMuted`, `voice.leave`는 무시한다.
 
 ### 재협상
 
@@ -169,7 +169,12 @@ stateDiagram-v2
 
 ### 음소거
 
-음소거는 재협상하지 않는다. 클라이언트가 `voice.setMuted`를 보내면 서버는 트랙을 그대로 둔 채 그 참가자의 패킷 전달을 멈추고 발화 판정에서도 뺀 뒤, 방에 `voice.muted`로 알린다. 새로 들어온 참가자에게는 입장 직후 기존 참가자들의 음소거 상태를 `voice.muted`로 한 번씩 보낸다.
+음소거는 재협상하지 않는다. 클라이언트가 `voice.setMuted`를 보내면 서버는 트랙을 그대로 둔 채 그 참가자의 패킷 전달을 멈추고 발화 판정에서도 뺀다.
+
+- 음소거 상태가 바뀌면 방의 나머지 참가자에게 `voice.muted`로 알린다. 보낸 사람에게는 보내지 않는다. 이미 그 상태이면 아무것도 하지 않는다.
+- 참가자는 음소거하지 않은 상태로 입장한다. 처음부터 음소거하려면 `voice.join` 뒤에 `voice.setMuted`를 보낸다.
+- 새로 들어온 참가자에게는 입장 직후 음소거 중인 기존 참가자의 상태만 `voice.muted`로 보낸다. 받지 않은 참가자는 음소거하지 않은 것으로 본다.
+- 음소거 중인 참가자가 나가면 나머지 참가자에게 그 참가자의 `voice.muted`를 `muted: false`로 보낸다. 같은 계정이 다시 입장하면 음소거하지 않은 상태로 시작한다.
 
 ### 화자 식별과 발화 감지
 
@@ -222,7 +227,7 @@ stateDiagram-v2
 | `sdpMid` | string \| null | W3C `RTCIceCandidate.sdpMid` |
 | `sdpMLineIndex` | integer \| null | W3C `RTCIceCandidate.sdpMLineIndex` |
 | `usernameFragment` | string \| null | W3C `RTCIceCandidate.usernameFragment` |
-| `muted` | boolean | `true`면 음소거 |
+| `muted` | boolean | `true`면 음소거. 필수다 |
 | `speaking` | boolean | `true`면 발화 중 |
 | `participantId` | string | 방 참가자 ID |
 | `reason` | string | 에러 원인. UPPER_SNAKE_CASE 상수이고 클라이언트는 이 값으로 분기한다 |
