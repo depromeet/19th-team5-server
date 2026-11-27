@@ -23,7 +23,7 @@
 
 ## 영향
 
-- core (Java):
+- core (Kotlin):
 - realtime (Go):
 - 클라이언트:
 

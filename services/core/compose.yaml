@@ -1,0 +1,10 @@
+# 로컬 개발용 PostgreSQL. ./gradlew bootRun 하면 Spring Boot가 자동으로 띄운다.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: core
+      POSTGRES_USER: core
+      POSTGRES_PASSWORD: core
+    ports:
+      - "5432"

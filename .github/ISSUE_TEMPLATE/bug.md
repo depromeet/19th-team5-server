@@ -18,5 +18,5 @@ assignees: ""
 <!-- 원래 어떻게 동작해야 하나요? -->
 
 ## 🖥 환경
-- 서버: Java API / Go 실시간 / Go 미디어
+- 서버: Kotlin API / Go 실시간 / Go 미디어
 - 브랜치·환경: develop / main
