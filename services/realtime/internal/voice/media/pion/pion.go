@@ -31,6 +31,12 @@ type Driver struct {
 // ownership of packetConn, and the caller must call [Driver.Close] to release
 // it.
 func NewDriver(packetConn net.PacketConn) *Driver {
+	return newDriver(packetConn, webrtc.SettingEngine{})
+}
+
+// newDriver is [NewDriver] with the settings in s, which lets tests shorten the
+// ICE timeouts.
+func newDriver(packetConn net.PacketConn, s webrtc.SettingEngine) *Driver {
 	var m webrtc.MediaEngine
 	// RegisterCodec fails only for an unknown kind or a payload type that
 	// another codec has.
@@ -43,7 +49,6 @@ func NewDriver(packetConn net.PacketConn) *Driver {
 	_ = m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.AudioLevelURI}, webrtc.RTPCodecTypeAudio)
 
 	mux := webrtc.NewICEUDPMux(nil, packetConn)
-	var s webrtc.SettingEngine
 	s.SetICEUDPMux(mux)
 	// The mux offers only the address that packetConn is bound to, so this
 	// matters only when packetConn is bound to a loopback address.
@@ -61,7 +66,7 @@ func NewDriver(packetConn net.PacketConn) *Driver {
 // Open implements [media.Driver]. The participant's voice goes out in a
 // stream whose ID is participantID. Open ignores ctx, so it succeeds even if
 // ctx is cancelled.
-func (d *Driver) Open(_ context.Context, participantID string) (media.Conn, error) {
+func (d *Driver) Open(_ context.Context, participantID string, onFailed func()) (media.Conn, error) {
 	pc, err := d.api.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		return nil, err
@@ -79,6 +84,11 @@ func (d *Driver) Open(_ context.Context, participantID string) (media.Conn, erro
 		subscribers: make(map[*conn]*webrtc.RTPSender),
 		publishers:  make(map[*conn]struct{}),
 	}
+	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
+		if s == webrtc.PeerConnectionStateFailed {
+			onFailed()
+		}
+	})
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		for {
 			p, _, err := remote.ReadRTP()
@@ -114,6 +124,8 @@ type conn struct {
 	publishers  map[*conn]struct{}
 	// muted is read by the goroutine that forwards the participant's voice.
 	muted atomic.Bool
+	// restartICE is whether the next offer restarts ICE.
+	restartICE bool
 }
 
 func (c *conn) Close() error {
@@ -144,11 +156,16 @@ func (c *conn) SetMuted(muted bool) {
 	c.muted.Store(muted)
 }
 
+func (c *conn) RestartICE() {
+	c.restartICE = true
+}
+
 func (c *conn) CreateOffer(_ context.Context) (string, error) {
-	offer, err := c.pc.CreateOffer(nil)
+	offer, err := c.pc.CreateOffer(&webrtc.OfferOptions{ICERestart: c.restartICE})
 	if err != nil {
 		return "", fmt.Errorf("create offer: %w", err)
 	}
+	c.restartICE = false
 	gathered := webrtc.GatheringCompletePromise(c.pc)
 	if err := c.pc.SetLocalDescription(offer); err != nil {
 		return "", fmt.Errorf("set local description: %w", err)

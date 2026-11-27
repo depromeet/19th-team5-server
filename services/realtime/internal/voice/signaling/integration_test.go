@@ -39,6 +39,10 @@ type client struct {
 	// muted is the last mute state of each participant that the room sent on
 	// the current connection.
 	muted map[string]bool
+	// ufrag is the ICE username fragment of the last offer, and ufragChanges
+	// counts the offers whose fragment differed from the one before.
+	ufrag        string
+	ufragChanges int
 }
 
 func (c *client) join(ctx context.Context) {
@@ -166,6 +170,17 @@ func (c *client) handleOffer(ctx context.Context, payload jsontext.Value) {
 		return
 	}
 	c.maxMedia = max(c.maxMedia, strings.Count(offer.SDP, "\nm="))
+	// Pion gives every media section the same fragment.
+	_, rest, ok := strings.Cut(offer.SDP, "a=ice-ufrag:")
+	if !ok {
+		c.t.Errorf("%s: offer %d has no ICE username fragment", c.id, offer.OfferID)
+		return
+	}
+	ufrag, _, _ := strings.Cut(rest, "\r\n")
+	if c.ufrag != "" && ufrag != c.ufrag {
+		c.ufragChanges++
+	}
+	c.ufrag = ufrag
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeOffer, SDP: offer.SDP}); err != nil {
 		c.t.Errorf("%s: SetRemoteDescription(offer %d) failed: %v", c.id, offer.OfferID, err)
 		return
@@ -216,6 +231,24 @@ func (c *client) waitMuted(id string, muted bool) error {
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%s was not told that %s has muted %t", c.id, id, muted)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// waitUfragChange waits until an offer to c has changed its ICE username
+// fragment, or returns an error after 20 seconds.
+func (c *client) waitUfragChange() error {
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		c.mu.Lock()
+		changes := c.ufragChanges
+		c.mu.Unlock()
+		if changes > 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s got no offer with a new ICE username fragment", c.id)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -356,5 +389,23 @@ func TestMute(t *testing.T) {
 	p1.send(ctx, "voice.setMuted", protocol.SetMuted{Muted: false})
 	if err := waitHearing(clients, unmuted); err != nil {
 		t.Fatalf("after p1 unmuted, %v", err)
+	}
+}
+
+func TestRestartICE(t *testing.T) {
+	ctx := t.Context()
+	clients, err := startCall(ctx, t)
+	if err != nil {
+		t.Fatalf("after all clients joined, %v", err)
+	}
+	p1 := clients["p1"]
+
+	p1.send(ctx, "voice.restartIce", nil)
+	if err := p1.waitUfragChange(); err != nil {
+		t.Fatalf("after p1 sent voice.restartIce, %v", err)
+	}
+	restarted := time.Now()
+	if err := waitHearing(clients, restarted); err != nil {
+		t.Errorf("after the ICE restart of p1, %v", err)
 	}
 }

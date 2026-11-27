@@ -46,6 +46,11 @@ func TestParse(t *testing.T) {
 			want: Candidate{Candidate: ""},
 		},
 		{
+			name: "restart_ice_empty_payload",
+			in:   `{"type":"voice.restartIce","payload":{}}`,
+			want: RestartICE{},
+		},
+		{
 			name: "set_muted",
 			in:   `{"type":"voice.setMuted","payload":{"muted":false}}`,
 			want: SetMuted{Muted: false},

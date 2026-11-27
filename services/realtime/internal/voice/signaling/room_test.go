@@ -27,7 +27,7 @@ type roomHarness struct {
 // fakeDrivers opens the connection of each participant on its own fakeDriver.
 type fakeDrivers map[string]*fakeDriver
 
-func (d fakeDrivers) Open(ctx context.Context, participantID string) (media.Conn, error) {
+func (d fakeDrivers) Open(ctx context.Context, participantID string, _ func()) (media.Conn, error) {
 	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}
@@ -352,6 +352,36 @@ func TestRoomLeaveUnmutes(t *testing.T) {
 		}
 		if diff := cmp.Diff(want, h.sent); diff != "" {
 			t.Errorf("receive(p1 leave) sent messages diff (-want +got):\n%s", diff)
+		}
+	})
+}
+
+func TestRoomRestartICE(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		h := newRoomHarness(&fakeDriver{})
+		h.receive(ctx, testParticipantID, `{"type":"voice.join"}`)
+		h.receive(ctx, testParticipantID, `{"type":"voice.answer","payload":{"sdp":"answer","offerId":1}}`)
+
+		h.receive(ctx, testParticipantID, `{"type":"voice.restartIce"}`)
+		h.receive(ctx, testParticipantID, `{"type":"voice.answer","payload":{"sdp":"answer","offerId":2}}`)
+		h.driver.onFailed()
+		synctest.Wait()
+
+		want := []sentMessage{
+			message(t, testParticipantID, protocol.Offer{SDP: "sdp1", OfferID: 1}),
+			message(t, testParticipantID, protocol.Offer{SDP: "sdp2 ice-restart", OfferID: 2}),
+			message(t, testParticipantID, protocol.Offer{SDP: "sdp3 ice-restart", OfferID: 3}),
+		}
+		if diff := cmp.Diff(want, h.sent); diff != "" {
+			t.Errorf("receive(restartIce) and onFailed() sent messages diff (-want +got):\n%s", diff)
+		}
+
+		h.receive(ctx, testParticipantID, `{"type":"voice.leave"}`)
+		h.driver.onFailed()
+		synctest.Wait()
+		if h.driver.restartICE {
+			t.Error("onFailed() after voice.leave called RestartICE() on the closed connection")
 		}
 	})
 }

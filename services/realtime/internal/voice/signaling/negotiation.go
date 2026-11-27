@@ -62,6 +62,17 @@ func (n *negotiation) renegotiationNeeded(ctx context.Context) {
 	}
 }
 
+// restartICE sends an offer that restarts ICE now, or after the answer that n
+// awaits.
+func (n *negotiation) restartICE(ctx context.Context) {
+	// A closed connection must not be used.
+	if n.state == stateClosed {
+		return
+	}
+	n.conn.RestartICE()
+	n.renegotiationNeeded(ctx)
+}
+
 func (n *negotiation) receiveCandidate(ctx context.Context, c protocol.Candidate) {
 	switch n.state {
 	case stateStable:

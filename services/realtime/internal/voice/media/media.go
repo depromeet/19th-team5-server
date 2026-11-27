@@ -8,8 +8,12 @@ import "context"
 // concurrently. The participant ID tells the participant's voice apart from
 // others when it is forwarded. If Open fails, it leaves no connection behind.
 // Otherwise the caller must call [Conn.Close] when it is done with the Conn.
+//
+// onFailed is called on a goroutine of its own each time the connection
+// fails, such as when it loses its path. It may be called after [Conn.Close].
+// [Conn.RestartICE] can bring the connection back.
 type Driver interface {
-	Open(ctx context.Context, participantID string) (Conn, error)
+	Open(ctx context.Context, participantID string, onFailed func()) (Conn, error)
 }
 
 // Conn is a participant's WebRTC connection. It is used by one goroutine at a
@@ -21,6 +25,9 @@ type Conn interface {
 	// CreateOffer creates an SDP offer and sets it as the local description.
 	// The offer has all of the connection's ICE candidates.
 	CreateOffer(ctx context.Context) (sdp string, err error)
+	// RestartICE makes the next offer restart ICE, which finds a new path and
+	// keeps the tracks.
+	RestartICE()
 	// ApplyAnswer sets sdp, an SDP answer, as the remote description.
 	ApplyAnswer(ctx context.Context, sdp string) error
 	// AddCandidate fails until [Conn.ApplyAnswer] has succeeded once.
