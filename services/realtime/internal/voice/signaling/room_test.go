@@ -19,7 +19,7 @@ type sentMessage struct {
 }
 
 type roomHarness struct {
-	r      *room
+	r      *Room
 	driver *fakeDriver
 	sent   []sentMessage
 }
@@ -44,22 +44,19 @@ func newRoomHarness(d *fakeDriver) *roomHarness {
 
 func newMultiRoomHarness(d media.Driver) *roomHarness {
 	h := &roomHarness{}
-	h.r = newRoom(
-		d,
-		func(ctx context.Context, participantID string, msg []byte) {
-			if ctx.Value(eventKey{}) != nil {
-				h.sent = append(h.sent, sentMessage{ParticipantID: participantID, Data: string(msg)})
-			}
-		},
-		slog.New(slog.DiscardHandler),
-	)
+	srv := NewServer(d, slog.New(slog.DiscardHandler))
+	h.r = srv.NewRoom(func(ctx context.Context, participantID string, msg []byte) {
+		if ctx.Value(eventKey{}) != nil {
+			h.sent = append(h.sent, sentMessage{ParticipantID: participantID, Data: string(msg)})
+		}
+	})
 	return h
 }
 
 // receive passes data to the room and waits until the room goroutine has
 // handled it.
 func (h *roomHarness) receive(ctx context.Context, participantID, data string) {
-	h.r.receive(ctx, participantID, []byte(data))
+	h.r.Receive(ctx, participantID, []byte(data))
 	synctest.Wait()
 }
 
@@ -74,7 +71,7 @@ func message(t *testing.T, participantID string, msg protocol.ServerMessage) sen
 
 func TestRoomPostWaitsForRunningFunction(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		r := newRoom(&fakeDriver{}, nil, slog.New(slog.DiscardHandler))
+		r := NewServer(&fakeDriver{}, nil).NewRoom(nil)
 		release := make(chan struct{})
 		var ran []string
 
@@ -382,6 +379,43 @@ func TestRoomRestartICE(t *testing.T) {
 		synctest.Wait()
 		if h.driver.restartICE {
 			t.Error("onFailed() after voice.leave called RestartICE() on the closed connection")
+		}
+	})
+}
+
+func TestRoomDisconnectReconnectAndLeave(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		p1, p2 := &fakeDriver{}, &fakeDriver{}
+		h := newMultiRoomHarness(fakeDrivers{"p1": p1, "p2": p2})
+		h.receive(ctx, "p1", `{"type":"voice.join"}`)
+		h.receive(ctx, "p2", `{"type":"voice.join"}`)
+		h.receive(ctx, "p2", `{"type":"voice.setMuted","payload":{"muted":true}}`)
+		h.sent = nil
+
+		// Disconnect p1, then reconnect: p1 gets its pending offer resent and p2's mute state.
+		h.r.Disconnect(ctx, "p1")
+		synctest.Wait()
+		h.r.Reconnect(ctx, "p1")
+		synctest.Wait()
+
+		want := []sentMessage{
+			message(t, "p1", protocol.Offer{SDP: "sdp1", OfferID: 2}),
+			message(t, "p1", protocol.Muted{ParticipantID: "p2", Muted: true}),
+		}
+		if diff := cmp.Diff(want, h.sent); diff != "" {
+			t.Errorf("Reconnect(p1) sent messages diff (-want +got):\n%s", diff)
+		}
+
+		// Reconnect for a participant not in voice is ignored.
+		h.r.Reconnect(ctx, "unknown")
+		synctest.Wait()
+
+		// Public Leave closes p1's connection.
+		h.r.Leave(ctx, "p1")
+		synctest.Wait()
+		if p1.closes != 1 {
+			t.Errorf("Leave(p1) closed p1 %d times, want 1", p1.closes)
 		}
 	})
 }
