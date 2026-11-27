@@ -42,6 +42,8 @@ type fakeDriver struct {
 	candidates []media.Candidate
 	closes     int
 	publishers []media.Conn
+	// muted has the argument of each SetMuted call.
+	muted []bool
 }
 
 func checkContext(ctx context.Context) error {
@@ -114,6 +116,10 @@ func (d *fakeDriver) Subscribe(ctx context.Context, publisher media.Conn) error 
 	}
 	d.publishers = append(d.publishers, publisher)
 	return nil
+}
+
+func (d *fakeDriver) SetMuted(muted bool) {
+	d.muted = append(d.muted, muted)
 }
 
 type harness struct {
