@@ -141,7 +141,7 @@ core → 브라우저: 액세스 토큰(본문) + 리프레시 토큰(쿠키)
 | 5 | `exp` | 시계 차이 여유 최대 60초 (RFC 7519 4.1.4. Spring 기본값 60초, golang-jwt는 `WithLeeway`로 설정) |
 
 - core는 자기 JWKS를 HTTP로 다시 읽지 않고 메모리의 공개키로 검증한다
-- Spring `NimbusJwtDecoder`는 기본 설정에서 `typ: at+jwt`를 거부한다. `DefaultJOSEObjectTypeVerifier`로 `at+jwt`를 허용해야 한다
+- Spring Security 7.2는 `JwtValidators.createAtJwtValidator()`로 RFC 9068 검증(`typ: at+jwt`, `iss`, `aud`, `client_id`, `exp`)을 한 번에 건다. Spring 6.x(ADR-0003 실험 당시)처럼 `DefaultJOSEObjectTypeVerifier`를 따로 설정하지 않아도 된다
 - golang-jwt는 `typ` 검사 옵션이 없어서 `token.Header["typ"]`를 직접 확인한다
 
 **JWKS 캐시 (realtime)**

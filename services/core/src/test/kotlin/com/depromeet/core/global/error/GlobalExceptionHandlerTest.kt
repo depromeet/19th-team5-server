@@ -1,5 +1,8 @@
 package com.depromeet.core.global.error
 
+import com.depromeet.core.auth.jwt.EphemeralSigningKeySource
+import com.depromeet.core.auth.jwt.JwtConfig
+import com.depromeet.core.global.security.ProblemSecurityHandler
 import com.depromeet.core.global.security.SecurityConfig
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -16,7 +19,14 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
 
 @WebMvcTest(controllers = [GlobalExceptionHandlerTest.ErrorTestController::class])
-@Import(SecurityConfig::class, GlobalExceptionHandler::class, GlobalExceptionHandlerTest.ErrorTestController::class)
+@Import(
+    SecurityConfig::class,
+    ProblemSecurityHandler::class,
+    JwtConfig::class,
+    EphemeralSigningKeySource::class,
+    GlobalExceptionHandler::class,
+    GlobalExceptionHandlerTest.ErrorTestController::class,
+)
 @WithMockUser
 class GlobalExceptionHandlerTest {
     @Autowired
