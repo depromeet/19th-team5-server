@@ -12,6 +12,8 @@ const (
 	typeOffer     = "voice.offer"
 	typeAnswer    = "voice.answer"
 	typeCandidate = "voice.candidate"
+	typeSetMuted  = "voice.setMuted"
+	typeMuted     = "voice.muted"
 	typeLeave     = "voice.leave"
 	typeError     = "voice.error"
 )
@@ -93,6 +95,8 @@ func Parse(data []byte) (ClientMessage, error) {
 		return parseAnswer(payload)
 	case typeCandidate:
 		return parseCandidate(payload)
+	case typeSetMuted:
+		return parseSetMuted(payload)
 	case typeLeave:
 		return Leave{}, nil
 	default:
@@ -137,6 +141,20 @@ func parseCandidate(payload jsontext.Value) (ClientMessage, error) {
 		SDPMLineIndex:    c.SDPMLineIndex,
 		UsernameFragment: c.UsernameFragment,
 	}, nil
+}
+
+func parseSetMuted(payload jsontext.Value) (ClientMessage, error) {
+	// A bool cannot tell a missing field from false.
+	var m struct {
+		Muted *bool `json:"muted"`
+	}
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return nil, unmarshalError(err, "/payload")
+	}
+	if m.Muted == nil {
+		return nil, &ParseError{Cause: causeMissingField, Field: "/payload/muted"}
+	}
+	return SetMuted{Muted: *m.Muted}, nil
 }
 
 // unmarshalError describes an error from [json.Unmarshal] without the details

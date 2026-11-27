@@ -2,6 +2,7 @@ package pion
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -112,24 +113,35 @@ func connect(ctx context.Context, c media.Conn, client *webrtc.PeerConnection) (
 	return offer, nil
 }
 
-func TestSubscribe(t *testing.T) {
-	ctx := t.Context()
+// call has p1 and p2 subscribed to each other and connected to two clients.
+type call struct {
+	c1, c2 media.Conn
+	// heard gets the stream ID of a packet that client2 received, unless it
+	// already holds one.
+	heard <-chan string
+}
+
+// startCall starts a call in which client1 sends a voice packet every 20ms
+// until the test ends. Unless it returns an error, the test must close c1 and
+// c2.
+func startCall(ctx context.Context, t *testing.T) (*call, error) {
+	t.Helper()
 	d, _ := newTestDriver(ctx, t)
 	c1, err := d.Open(ctx, "p1")
 	if err != nil {
-		t.Fatalf("Open(p1) failed: %v", err)
+		return nil, fmt.Errorf("Open(p1): %w", err)
 	}
 	c2, err := d.Open(ctx, "p2")
 	if err != nil {
-		t.Fatalf("Open(p2) failed: %v", err)
+		return nil, fmt.Errorf("Open(p2): %w", err)
 	}
 	// Each subscribes to the other, so that closing c1 ends a subscription in
 	// each direction.
 	if err := c1.Subscribe(ctx, c2); err != nil {
-		t.Fatalf("p1 Subscribe(p2) failed: %v", err)
+		return nil, fmt.Errorf("p1 Subscribe(p2): %w", err)
 	}
 	if err := c2.Subscribe(ctx, c1); err != nil {
-		t.Fatalf("p2 Subscribe(p1) failed: %v", err)
+		return nil, fmt.Errorf("p2 Subscribe(p1): %w", err)
 	}
 
 	client1, client2 := newClient(t), newClient(t)
@@ -142,48 +154,114 @@ func TestSubscribe(t *testing.T) {
 	}
 	heard := make(chan string, 1)
 	client2.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		if _, _, err := remote.ReadRTP(); err != nil {
-			return
-		}
-		select {
-		case heard <- remote.StreamID():
-		default:
+		for {
+			if _, _, err := remote.ReadRTP(); err != nil {
+				return
+			}
+			select {
+			case heard <- remote.StreamID():
+			default:
+			}
 		}
 	})
 	if _, err := connect(ctx, c1, client1); err != nil {
-		t.Fatalf("connect(p1) failed: %v", err)
+		return nil, fmt.Errorf("connect(p1): %w", err)
 	}
 	if _, err := connect(ctx, c2, client2); err != nil {
-		t.Fatalf("connect(p2) failed: %v", err)
+		return nil, fmt.Errorf("connect(p2): %w", err)
 	}
 
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	p := &rtp.Packet{Version: 2, Payload: []byte{0xf8, 0xff, 0xfe}}
-	timeout := time.After(10 * time.Second)
-	var got string
-	for got == "" {
-		select {
-		case got = <-heard:
-		case <-ticker.C:
-			p.SequenceNumber++
-			p.Timestamp += 960
-			if err := mic.WriteRTP(p); err != nil {
-				t.Fatalf("client1 WriteRTP() failed: %v", err)
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		p := &rtp.Packet{Version: 2, Payload: []byte{0xf8, 0xff, 0xfe}}
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				p.SequenceNumber++
+				p.Timestamp += 960
+				if err := mic.WriteRTP(p); err != nil {
+					t.Errorf("client1 WriteRTP() failed: %v", err)
+					return
+				}
 			}
-		case <-timeout:
-			t.Fatal("client2 heard nothing from p1 within 10s")
 		}
+	}()
+	// Cleanups run last first, so the packets stop before the clients close.
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+	})
+	return &call{c1: c1, c2: c2, heard: heard}, nil
+}
+
+// waitHeard returns the stream ID of a packet that client2 receives, or an
+// error after 10 seconds.
+func (c *call) waitHeard() (string, error) {
+	select {
+	case id := <-c.heard:
+		return id, nil
+	case <-time.After(10 * time.Second):
+		return "", errors.New("client2 heard nothing within 10s")
+	}
+}
+
+func TestSubscribe(t *testing.T) {
+	c, err := startCall(t.Context(), t)
+	if err != nil {
+		t.Fatalf("startCall() failed: %v", err)
+	}
+
+	got, err := c.waitHeard()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if got != "p1" {
 		t.Errorf("client2 heard stream %q, want p1", got)
 	}
 
-	if err := c1.Close(); err != nil {
+	if err := c.c1.Close(); err != nil {
 		t.Errorf("p1 Close() failed: %v", err)
 	}
 	// c2 fails to close if it still holds the closed c1.
-	if err := c2.Close(); err != nil {
+	if err := c.c2.Close(); err != nil {
 		t.Errorf("p2 Close() after p1 closed failed: %v", err)
+	}
+}
+
+func TestSetMuted(t *testing.T) {
+	c, err := startCall(t.Context(), t)
+	if err != nil {
+		t.Fatalf("startCall() failed: %v", err)
+	}
+	defer func() {
+		if err := errors.Join(c.c1.Close(), c.c2.Close()); err != nil {
+			t.Errorf("Close() failed: %v", err)
+		}
+	}()
+	if _, err := c.waitHeard(); err != nil {
+		t.Fatal(err)
+	}
+
+	c.c1.SetMuted(true)
+	// Packets that p1 forwarded before SetMuted may still be on their way.
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-c.heard:
+	default:
+	}
+	select {
+	case <-c.heard:
+		t.Error("client2 heard p1 within 200ms while p1 was muted")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	c.c1.SetMuted(false)
+	if _, err := c.waitHeard(); err != nil {
+		t.Errorf("after SetMuted(false), %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 
 	"github.com/depromeet/19th-team5-server/services/realtime/internal/voice/media"
 	"github.com/pion/ice/v4"
@@ -65,11 +66,20 @@ func (d *Driver) Open(_ context.Context, participantID string) (media.Conn, erro
 	})
 	// NewTrackLocalStaticRTP fails only through its options.
 	track, _ := webrtc.NewTrackLocalStaticRTP(opus, "audio", participantID)
+	c := &conn{
+		pc:          pc,
+		track:       track,
+		subscribers: make(map[*conn]*webrtc.RTPSender),
+		publishers:  make(map[*conn]struct{}),
+	}
 	pc.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		for {
 			p, _, err := remote.ReadRTP()
 			if err != nil {
 				return
+			}
+			if c.muted.Load() {
+				continue
 			}
 			// WriteRTP keeps writing to the other subscribers when one fails,
 			// and a packet that one subscriber misses is like a packet lost on
@@ -77,12 +87,7 @@ func (d *Driver) Open(_ context.Context, participantID string) (media.Conn, erro
 			_ = track.WriteRTP(p)
 		}
 	})
-	return &conn{
-		pc:          pc,
-		track:       track,
-		subscribers: make(map[*conn]*webrtc.RTPSender),
-		publishers:  make(map[*conn]struct{}),
-	}, nil
+	return c, nil
 }
 
 // Close closes the UDP port. The connections that d opened stop carrying
@@ -100,6 +105,8 @@ type conn struct {
 	// subscribers maps each subscriber to the sender of track on it.
 	subscribers map[*conn]*webrtc.RTPSender
 	publishers  map[*conn]struct{}
+	// muted is read by the goroutine that forwards the participant's voice.
+	muted atomic.Bool
 }
 
 func (c *conn) Close() error {
@@ -124,6 +131,10 @@ func (c *conn) Subscribe(_ context.Context, publisher media.Conn) error {
 	p.subscribers[c] = sender
 	c.publishers[p] = struct{}{}
 	return nil
+}
+
+func (c *conn) SetMuted(muted bool) {
+	c.muted.Store(muted)
 }
 
 func (c *conn) CreateOffer(_ context.Context) (string, error) {

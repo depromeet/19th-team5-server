@@ -29,6 +29,9 @@ type Conn interface {
 	// next negotiation on. publisher must come from the same Driver and be used
 	// by the same goroutine as this connection.
 	Subscribe(ctx context.Context, publisher Conn) error
+	// SetMuted stops forwarding the participant's voice to the subscribers
+	// while muted is true. The tracks stay, so it needs no negotiation.
+	SetMuted(muted bool)
 }
 
 // Candidate is a W3C RTCIceCandidateInit.

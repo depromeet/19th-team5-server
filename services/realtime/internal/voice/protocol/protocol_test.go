@@ -46,6 +46,11 @@ func TestParse(t *testing.T) {
 			want: Candidate{Candidate: ""},
 		},
 		{
+			name: "set_muted",
+			in:   `{"type":"voice.setMuted","payload":{"muted":false}}`,
+			want: SetMuted{Muted: false},
+		},
+		{
 			name: "leave_missing_payload",
 			in:   `{"type":"voice.leave"}`,
 			want: Leave{},
@@ -86,6 +91,9 @@ func TestParseInvalid(t *testing.T) {
 			in:   `{"type":"voice.candidate","payload":{"candidate":"candidate:1","sdpMid":null,"sdpMLineIndex":null}}`,
 			want: &ParseError{Cause: causeMissingField, Field: "/payload/sdpMid"},
 		},
+
+		{name: "set_muted_missing_muted", in: `{"type":"voice.setMuted"}`, want: &ParseError{Cause: causeMissingField, Field: "/payload/muted"}},
+		{name: "set_muted_string_muted", in: `{"type":"voice.setMuted","payload":{"muted":"true"}}`, want: &ParseError{Cause: causeWrongFieldType, Field: "/payload/muted"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -119,6 +127,11 @@ func TestMarshal(t *testing.T) {
 			name: "offer",
 			msg:  Offer{SDP: "v=0\r\n...", OfferID: 1},
 			want: `{"type":"voice.offer","payload":{"sdp":"v=0\r\n...","offerId":1}}`,
+		},
+		{
+			name: "muted",
+			msg:  Muted{ParticipantID: "p1", Muted: true},
+			want: `{"type":"voice.muted","payload":{"participantId":"p1","muted":true}}`,
 		},
 		{
 			name: "error_design_doc",

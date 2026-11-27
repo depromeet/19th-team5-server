@@ -33,6 +33,17 @@ type Candidate struct {
 	UsernameFragment *string `json:"usernameFragment"`
 }
 
+// SetMuted sets whether the client's voice is muted.
+type SetMuted struct {
+	Muted bool `json:"muted"`
+}
+
+// Muted tells whether the voice of a participant in the room is muted.
+type Muted struct {
+	ParticipantID string `json:"participantId"`
+	Muted         bool   `json:"muted"`
+}
+
 // Leave asks to leave the voice channel.
 type Leave struct{}
 
@@ -61,9 +72,11 @@ const (
 func (Join) isClientMessage()      {}
 func (Answer) isClientMessage()    {}
 func (Candidate) isClientMessage() {}
+func (SetMuted) isClientMessage()  {}
 func (Leave) isClientMessage()     {}
 
 // messageType gives the type of a server message and ensures that only server
 // messages can be a ServerMessage.
 func (Offer) messageType() string        { return typeOffer }
+func (Muted) messageType() string        { return typeMuted }
 func (ErrorMessage) messageType() string { return typeError }

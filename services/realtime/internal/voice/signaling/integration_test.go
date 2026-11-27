@@ -36,6 +36,9 @@ type client struct {
 	heard map[string]time.Time
 	// maxMedia is the most media sections that an offer had.
 	maxMedia int
+	// muted is the last mute state of each participant that the room sent on
+	// the current connection.
+	muted map[string]bool
 }
 
 func (c *client) join(ctx context.Context) {
@@ -86,7 +89,7 @@ func (c *client) join(ctx context.Context) {
 	}()
 
 	c.mu.Lock()
-	c.pc, c.mic, c.micOn, c.stop = pc, mic, false, stop
+	c.pc, c.mic, c.micOn, c.stop, c.muted = pc, mic, false, stop, make(map[string]bool)
 	c.mu.Unlock()
 	c.send(ctx, "voice.join", nil)
 }
@@ -131,13 +134,27 @@ func (c *client) handle(ctx context.Context, data []byte) {
 		c.t.Errorf("%s: json.Unmarshal(%s) failed: %v", c.id, data, err)
 		return
 	}
-	if env.Type != "voice.offer" {
-		c.t.Errorf("%s: room sent %s, want only voice.offer", c.id, data)
-		return
+	switch env.Type {
+	case "voice.offer":
+		c.handleOffer(ctx, env.Payload)
+	case "voice.muted":
+		var m protocol.Muted
+		if err := json.Unmarshal(env.Payload, &m); err != nil {
+			c.t.Errorf("%s: json.Unmarshal(%s) failed: %v", c.id, env.Payload, err)
+			return
+		}
+		c.mu.Lock()
+		c.muted[m.ParticipantID] = m.Muted
+		c.mu.Unlock()
+	default:
+		c.t.Errorf("%s: room sent %s, want only voice.offer and voice.muted", c.id, data)
 	}
+}
+
+func (c *client) handleOffer(ctx context.Context, payload jsontext.Value) {
 	var offer protocol.Offer
-	if err := json.Unmarshal(env.Payload, &offer); err != nil {
-		c.t.Errorf("%s: json.Unmarshal(%s) failed: %v", c.id, env.Payload, err)
+	if err := json.Unmarshal(payload, &offer); err != nil {
+		c.t.Errorf("%s: json.Unmarshal(%s) failed: %v", c.id, payload, err)
 		return
 	}
 
@@ -186,6 +203,24 @@ func (c *client) hearsSince(since time.Time, ids []string) bool {
 	return true
 }
 
+// waitMuted waits until the room has told c that the mute state of id is
+// muted, or returns an error after 20 seconds.
+func (c *client) waitMuted(id string, muted bool) error {
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		c.mu.Lock()
+		got, ok := c.muted[id]
+		c.mu.Unlock()
+		if ok && got == muted {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s was not told that %s has muted %t", c.id, id, muted)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // waitHearing waits until every client has heard all the others since the
 // given time, or returns an error after 20 seconds.
 func waitHearing(clients map[string]*client, since time.Time) error {
@@ -207,19 +242,22 @@ func waitHearing(clients map[string]*client, since time.Time) error {
 	return nil
 }
 
-func TestVoiceCall(t *testing.T) {
-	ctx := t.Context()
+// startCall joins four clients to a room and waits until all of them hear each
+// other, or returns an error after 20 seconds. The clients leave when the test
+// ends.
+func startCall(ctx context.Context, t *testing.T) (map[string]*client, error) {
+	t.Helper()
 	var lc net.ListenConfig
 	udp, err := lc.ListenPacket(ctx, "udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("ListenPacket() failed: %v", err)
 	}
 	driver := pion.NewDriver(udp)
-	defer func() {
+	t.Cleanup(func() {
 		if err := driver.Close(); err != nil {
 			t.Errorf("Driver.Close() failed: %v", err)
 		}
-	}()
+	})
 
 	clients := make(map[string]*client)
 	r := newRoom(driver, func(ctx context.Context, participantID string, msg []byte) {
@@ -228,17 +266,29 @@ func TestVoiceCall(t *testing.T) {
 	for _, id := range []string{"p1", "p2", "p3", "p4"} {
 		clients[id] = &client{t: t, id: id, room: r, heard: make(map[string]time.Time)}
 	}
-	defer func() {
+	// Cleanups run last first, so the clients leave before the driver closes.
+	// t.Context() is cancelled before the cleanups run.
+	cleanupCtx := context.WithoutCancel(ctx)
+	t.Cleanup(func() {
 		for _, c := range clients {
-			c.leave(ctx)
+			c.leave(cleanupCtx)
 		}
-	}()
+	})
 
 	start := time.Now()
 	for _, c := range clients {
 		c.join(ctx)
 	}
 	if err := waitHearing(clients, start); err != nil {
+		return nil, err
+	}
+	return clients, nil
+}
+
+func TestVoiceCall(t *testing.T) {
+	ctx := t.Context()
+	clients, err := startCall(ctx, t)
+	if err != nil {
 		t.Fatalf("after all clients joined, %v", err)
 	}
 	wantMedia := clients["p1"].maxMedia
@@ -260,9 +310,51 @@ func TestVoiceCall(t *testing.T) {
 		}
 	}
 
-	start = time.Now()
+	start := time.Now()
 	clients["p1"].join(ctx)
 	if err := waitHearing(clients, start); err != nil {
 		t.Fatalf("after p1 sent voice.join again, %v", err)
+	}
+}
+
+func TestMute(t *testing.T) {
+	ctx := t.Context()
+	clients, err := startCall(ctx, t)
+	if err != nil {
+		t.Fatalf("after all clients joined, %v", err)
+	}
+	p1 := clients["p1"]
+
+	p1.send(ctx, "voice.setMuted", protocol.SetMuted{Muted: true})
+	for id, c := range clients {
+		if id == "p1" {
+			continue
+		}
+		if err := c.waitMuted("p1", true); err != nil {
+			t.Errorf("after p1 muted, %v", err)
+		}
+	}
+	// The room mutes p1 before it sends voice.muted, but packets that it
+	// forwarded before may still be on their way.
+	time.Sleep(100 * time.Millisecond)
+	muted := time.Now()
+	time.Sleep(200 * time.Millisecond)
+	for id, c := range clients {
+		if id != "p1" && c.hearsSince(muted, []string{"p1"}) {
+			t.Errorf("%s heard p1 within 200ms while p1 was muted", id)
+		}
+	}
+
+	p4 := clients["p4"]
+	p4.leave(ctx)
+	p4.join(ctx)
+	if err := p4.waitMuted("p1", true); err != nil {
+		t.Errorf("after p4 rejoined, %v", err)
+	}
+
+	unmuted := time.Now()
+	p1.send(ctx, "voice.setMuted", protocol.SetMuted{Muted: false})
+	if err := waitHearing(clients, unmuted); err != nil {
+		t.Fatalf("after p1 unmuted, %v", err)
 	}
 }
