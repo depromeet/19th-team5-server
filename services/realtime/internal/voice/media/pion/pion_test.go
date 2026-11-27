@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/depromeet/19th-team5-server/services/realtime/internal/voice/media"
+	"github.com/google/go-cmp/cmp"
 	"github.com/pion/rtp"
+	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -30,11 +32,20 @@ func newTestDriver(ctx context.Context, t *testing.T) (*Driver, int) {
 	return d, udp.LocalAddr().(*net.UDPAddr).Port
 }
 
+// newClient returns a client that, like a browser, supports the audio level
+// extension.
 func newClient(t *testing.T) *webrtc.PeerConnection {
 	t.Helper()
+	var m webrtc.MediaEngine
+	// RegisterDefaultCodecs fails only for a payload type that another codec
+	// has, and m has no codecs yet.
+	_ = m.RegisterDefaultCodecs()
+	// RegisterHeaderExtension fails only for a direction other than recvonly
+	// or sendonly.
+	_ = m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.AudioLevelURI}, webrtc.RTPCodecTypeAudio)
 	var s webrtc.SettingEngine
 	s.SetIncludeLoopbackCandidate(true)
-	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(s)).NewPeerConnection(webrtc.Configuration{})
+	pc, err := webrtc.NewAPI(webrtc.WithMediaEngine(&m), webrtc.WithSettingEngine(s)).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		t.Fatalf("NewPeerConnection() failed: %v", err)
 	}
@@ -113,17 +124,37 @@ func connect(ctx context.Context, c media.Conn, client *webrtc.PeerConnection) (
 	return offer, nil
 }
 
+// micLevel is the audio level of the packets that client1 sends.
+var micLevel = rtp.AudioLevelExtension{Level: 30, Voice: true}
+
+// heardPacket is what client2 read from a packet.
+type heardPacket struct {
+	StreamID string
+	// Level is zero if the packet had no audio level.
+	Level rtp.AudioLevelExtension
+}
+
 // call has p1 and p2 subscribed to each other and connected to two clients.
 type call struct {
 	c1, c2 media.Conn
-	// heard gets the stream ID of a packet that client2 received, unless it
-	// already holds one.
-	heard <-chan string
+	// heard gets a packet that client2 received, unless it already holds one.
+	heard <-chan heardPacket
 }
 
-// startCall starts a call in which client1 sends a voice packet every 20ms
-// until the test ends. Unless it returns an error, the test must close c1 and
-// c2.
+// audioLevelID returns the ID that exts give the audio level extension. ok is
+// false if exts do not have it.
+func audioLevelID(exts []webrtc.RTPHeaderExtensionParameter) (id uint8, ok bool) {
+	for _, e := range exts {
+		if e.URI == sdp.AudioLevelURI {
+			return uint8(e.ID), true //nolint:gosec // Pion gives IDs from 1 to 14.
+		}
+	}
+	return 0, false
+}
+
+// startCall starts a call in which client1 sends a voice packet with micLevel
+// every 20ms until the test ends. Unless it returns an error, the test must
+// close c1 and c2.
 func startCall(ctx context.Context, t *testing.T) (*call, error) {
 	t.Helper()
 	d, _ := newTestDriver(ctx, t)
@@ -149,17 +180,24 @@ func startCall(ctx context.Context, t *testing.T) (*call, error) {
 	if err != nil {
 		t.Fatalf("NewTrackLocalStaticRTP() failed: %v", err)
 	}
-	if _, err := client1.AddTrack(mic); err != nil {
+	sender, err := client1.AddTrack(mic)
+	if err != nil {
 		t.Fatalf("client1 AddTrack() failed: %v", err)
 	}
-	heard := make(chan string, 1)
-	client2.OnTrack(func(remote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+	heard := make(chan heardPacket, 1)
+	client2.OnTrack(func(remote *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		// Without the extension, Level stays zero and TestSubscribe fails.
+		recvID, _ := audioLevelID(receiver.GetParameters().HeaderExtensions)
 		for {
-			if _, _, err := remote.ReadRTP(); err != nil {
+			p, _, err := remote.ReadRTP()
+			if err != nil {
 				return
 			}
+			h := heardPacket{StreamID: remote.StreamID()}
+			// Unmarshal leaves Level zero if the packet has no audio level.
+			_ = h.Level.Unmarshal(p.GetExtension(recvID))
 			select {
-			case heard <- remote.StreamID():
+			case heard <- h:
 			default:
 			}
 		}
@@ -170,6 +208,12 @@ func startCall(ctx context.Context, t *testing.T) (*call, error) {
 	if _, err := connect(ctx, c2, client2); err != nil {
 		return nil, fmt.Errorf("connect(p2): %w", err)
 	}
+	sendID, ok := audioLevelID(sender.GetParameters().HeaderExtensions)
+	if !ok {
+		return nil, errors.New("client1 did not negotiate the audio level extension with p1")
+	}
+	// Marshal fails only for a level above 127.
+	rawLevel, _ := micLevel.Marshal()
 
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
@@ -177,6 +221,8 @@ func startCall(ctx context.Context, t *testing.T) (*call, error) {
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
 		p := &rtp.Packet{Version: 2, Payload: []byte{0xf8, 0xff, 0xfe}}
+		// SetExtension fails only on a packet that already has extensions.
+		_ = p.SetExtension(sendID, rawLevel)
 		for {
 			select {
 			case <-stop:
@@ -199,14 +245,14 @@ func startCall(ctx context.Context, t *testing.T) (*call, error) {
 	return &call{c1: c1, c2: c2, heard: heard}, nil
 }
 
-// waitHeard returns the stream ID of a packet that client2 receives, or an
-// error after 10 seconds.
-func (c *call) waitHeard() (string, error) {
+// waitHeard returns a packet that client2 receives, or an error after 10
+// seconds.
+func (c *call) waitHeard() (heardPacket, error) {
 	select {
-	case id := <-c.heard:
-		return id, nil
+	case h := <-c.heard:
+		return h, nil
 	case <-time.After(10 * time.Second):
-		return "", errors.New("client2 heard nothing within 10s")
+		return heardPacket{}, errors.New("client2 heard nothing within 10s")
 	}
 }
 
@@ -220,8 +266,11 @@ func TestSubscribe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "p1" {
-		t.Errorf("client2 heard stream %q, want p1", got)
+	// The audio level shows that p2 gets the extension under the ID that p1
+	// got it.
+	want := heardPacket{StreamID: "p1", Level: micLevel}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("after p2 Subscribe(p1), client2 heard a packet that differs from what client1 sent (-want +got):\n%s", diff)
 	}
 
 	if err := c.c1.Close(); err != nil {
