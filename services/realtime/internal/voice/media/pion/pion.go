@@ -10,6 +10,7 @@ import (
 
 	"github.com/depromeet/19th-team5-server/services/realtime/internal/voice/media"
 	"github.com/pion/ice/v4"
+	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -34,6 +35,12 @@ func NewDriver(packetConn net.PacketConn) *Driver {
 	// RegisterCodec fails only for an unknown kind or a payload type that
 	// another codec has.
 	_ = m.RegisterCodec(webrtc.RTPCodecParameters{RTPCodecCapability: opus, PayloadType: 111}, webrtc.RTPCodecTypeAudio)
+	// Every connection gives the audio level extension the same ID, because
+	// Pion numbers extensions in the order they are registered here. So a
+	// forwarded packet carries its level under the ID that the subscriber
+	// negotiated. RegisterHeaderExtension fails only for a direction other
+	// than recvonly or sendonly.
+	_ = m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: sdp.AudioLevelURI}, webrtc.RTPCodecTypeAudio)
 
 	mux := webrtc.NewICEUDPMux(nil, packetConn)
 	var s webrtc.SettingEngine
