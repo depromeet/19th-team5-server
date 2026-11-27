@@ -36,6 +36,10 @@ type negotiation struct {
 	state             negotiationState
 	offerID           int
 	pendingCandidates []media.Candidate
+
+	// muted is whether the participant's voice is muted. It is not part of the
+	// negotiation, and only the room uses it.
+	muted bool
 }
 
 func newNegotiation(conn media.Conn, send func(context.Context, protocol.ServerMessage), post func(func()), logger *slog.Logger) *negotiation {

@@ -152,12 +152,16 @@ func TestRoomIgnoresMessagesBeforeJoin(t *testing.T) {
 
 		h.receive(ctx, testParticipantID, `{"type":"voice.answer","payload":{"sdp":"answer","offerId":1}}`)
 		h.receive(ctx, testParticipantID, `{"type":"voice.candidate","payload":{"candidate":"c1","sdpMid":"0"}}`)
+		h.receive(ctx, testParticipantID, `{"type":"voice.setMuted","payload":{"muted":true}}`)
 
 		if diff := cmp.Diff([]sentMessage(nil), h.sent); diff != "" {
-			t.Errorf("receive(answer, candidate) before join sent messages diff (-want +got):\n%s", diff)
+			t.Errorf("receive(answer, candidate, setMuted) before join sent messages diff (-want +got):\n%s", diff)
 		}
 		if diff := cmp.Diff([]string(nil), h.driver.answers); diff != "" {
-			t.Errorf("receive(answer, candidate) before join applied answers diff (-want +got):\n%s", diff)
+			t.Errorf("receive(answer, candidate, setMuted) before join applied answers diff (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff([]bool(nil), h.driver.muted); diff != "" {
+			t.Errorf("receive(answer, candidate, setMuted) before join SetMuted calls diff (-want +got):\n%s", diff)
 		}
 	})
 }
@@ -260,6 +264,94 @@ func TestRoomJoinSkipsClosedNegotiation(t *testing.T) {
 
 		if len(p1.publishers) != 0 || len(p2.publishers) != 0 {
 			t.Errorf("receive(p2 join) after p1's answer failed: p1 subscribed to %v and p2 to %v, want none", p1.publishers, p2.publishers)
+		}
+	})
+}
+
+func TestRoomSetMuted(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		p1, p2 := &fakeDriver{}, &fakeDriver{}
+		h := newMultiRoomHarness(fakeDrivers{"p1": p1, "p2": p2})
+		h.receive(ctx, "p1", `{"type":"voice.join"}`)
+		h.receive(ctx, "p2", `{"type":"voice.join"}`)
+
+		h.receive(ctx, "p1", `{"type":"voice.setMuted","payload":{"muted":true}}`)
+		h.receive(ctx, "p1", `{"type":"voice.setMuted","payload":{"muted":true}}`)
+
+		if diff := cmp.Diff([]bool{true}, p1.muted); diff != "" {
+			t.Errorf("receive(setMuted true, setMuted true) SetMuted calls diff (-want +got):\n%s", diff)
+		}
+		want := []sentMessage{
+			message(t, "p1", protocol.Offer{SDP: "sdp1", OfferID: 1}),
+			message(t, "p2", protocol.Offer{SDP: "sdp1", OfferID: 1}),
+			message(t, "p2", protocol.Muted{ParticipantID: "p1", Muted: true}),
+		}
+		if diff := cmp.Diff(want, h.sent); diff != "" {
+			t.Errorf("receive(setMuted true, setMuted true) sent messages diff (-want +got):\n%s", diff)
+		}
+	})
+}
+
+func TestRoomSetMutedIgnoresClosedNegotiation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		h := newRoomHarness(&fakeDriver{answerErr: errFake})
+		h.receive(ctx, testParticipantID, `{"type":"voice.join"}`)
+		h.receive(ctx, testParticipantID, `{"type":"voice.answer","payload":{"sdp":"answer","offerId":1}}`)
+
+		h.receive(ctx, testParticipantID, `{"type":"voice.setMuted","payload":{"muted":true}}`)
+
+		if diff := cmp.Diff([]bool(nil), h.driver.muted); diff != "" {
+			t.Errorf("receive(setMuted true) after the answer failed, SetMuted calls diff (-want +got):\n%s", diff)
+		}
+	})
+}
+
+func TestRoomJoinSendsMutedStates(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		h := newMultiRoomHarness(fakeDrivers{"p1": {}, "p2": {}, "p3": {}})
+		h.receive(ctx, "p1", `{"type":"voice.join"}`)
+		h.receive(ctx, "p2", `{"type":"voice.join"}`)
+		h.receive(ctx, "p1", `{"type":"voice.setMuted","payload":{"muted":true}}`)
+
+		h.receive(ctx, "p3", `{"type":"voice.join"}`)
+
+		var got []sentMessage
+		for _, m := range h.sent {
+			if m.ParticipantID == "p3" {
+				got = append(got, m)
+			}
+		}
+		want := []sentMessage{
+			message(t, "p3", protocol.Muted{ParticipantID: "p1", Muted: true}),
+			message(t, "p3", protocol.Offer{SDP: "sdp1", OfferID: 1}),
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Errorf("receive(p3 join) sent p3 messages diff (-want +got):\n%s", diff)
+		}
+	})
+}
+
+func TestRoomLeaveUnmutes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := eventContext(t)
+		h := newMultiRoomHarness(fakeDrivers{"p1": {}, "p2": {}})
+		h.receive(ctx, "p1", `{"type":"voice.join"}`)
+		h.receive(ctx, "p2", `{"type":"voice.join"}`)
+		h.receive(ctx, "p1", `{"type":"voice.setMuted","payload":{"muted":true}}`)
+
+		h.receive(ctx, "p1", `{"type":"voice.leave"}`)
+
+		want := []sentMessage{
+			message(t, "p1", protocol.Offer{SDP: "sdp1", OfferID: 1}),
+			message(t, "p2", protocol.Offer{SDP: "sdp1", OfferID: 1}),
+			message(t, "p2", protocol.Muted{ParticipantID: "p1", Muted: true}),
+			message(t, "p2", protocol.Muted{ParticipantID: "p1", Muted: false}),
+		}
+		if diff := cmp.Diff(want, h.sent); diff != "" {
+			t.Errorf("receive(p1 leave) sent messages diff (-want +got):\n%s", diff)
 		}
 	})
 }

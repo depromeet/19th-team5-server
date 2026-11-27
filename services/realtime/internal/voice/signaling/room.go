@@ -96,6 +96,8 @@ func (r *room) handle(ctx context.Context, participantID string, data []byte) {
 		if n, ok := r.negotiations[participantID]; ok {
 			n.receiveCandidate(ctx, msg)
 		}
+	case protocol.SetMuted:
+		r.setMuted(ctx, participantID, msg.Muted)
 	case protocol.Leave:
 		r.leave(ctx, participantID)
 	}
@@ -116,13 +118,17 @@ func (r *room) join(ctx context.Context, participantID string) {
 		r.post,
 		logger,
 	)
-	for _, other := range r.negotiations {
+	for otherID, other := range r.negotiations {
 		if other.state == stateClosed {
 			continue
 		}
 		subscribe(ctx, n, other)
 		subscribe(ctx, other, n)
 		other.renegotiationNeeded(ctx)
+		// A new participant takes the others to be unmuted.
+		if other.muted {
+			r.sendMessage(ctx, participantID, protocol.Muted{ParticipantID: otherID, Muted: true})
+		}
 	}
 	r.negotiations[participantID] = n
 	n.renegotiationNeeded(ctx)
@@ -141,8 +147,34 @@ func (r *room) leave(ctx context.Context, participantID string) {
 	}
 	n.leave(ctx)
 	delete(r.negotiations, participantID)
+	if n.muted {
+		// The participant is unmuted when they join again.
+		r.sendOthers(ctx, participantID, protocol.Muted{ParticipantID: participantID, Muted: false})
+	}
 	for _, other := range r.negotiations {
 		other.renegotiationNeeded(ctx)
+	}
+}
+
+// setMuted mutes or unmutes the participant's voice, and tells the others if
+// that changes it.
+func (r *room) setMuted(ctx context.Context, participantID string, muted bool) {
+	n, ok := r.negotiations[participantID]
+	// A closed connection must not be used.
+	if !ok || n.state == stateClosed || n.muted == muted {
+		return
+	}
+	n.conn.SetMuted(muted)
+	n.muted = muted
+	r.sendOthers(ctx, participantID, protocol.Muted{ParticipantID: participantID, Muted: muted})
+}
+
+// sendOthers sends msg to every participant but participantID.
+func (r *room) sendOthers(ctx context.Context, participantID string, msg protocol.ServerMessage) {
+	for id := range r.negotiations {
+		if id != participantID {
+			r.sendMessage(ctx, id, msg)
+		}
 	}
 }
 
