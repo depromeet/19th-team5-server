@@ -60,15 +60,15 @@ flowchart TD
 - 방 상태(음성 참가자 목록, 음소거 상태)와 구독 정책은 `signaling`만 갖는다. 미디어 모듈은 방을 모르고, `Subscribe`, `SetMuted`로 받은 대로 패킷만 전달한다.
 - v1 구독 정책은 '같은 방 전원'을 돌려주는 함수 하나라 패키지로 나누지 않는다.
 - 방마다 작업 큐 하나를 두고, 큐에 일이 있을 때만 고루틴 하나가 한 번에 하나씩 처리한다. 큐가 비면 고루틴이 끝난다. 입장, 퇴장, 클라이언트 메시지, 미디어 알림, 협상 타이머가 모두 이 큐로 들어오고, 방 상태와 협상 상태는 이 고루틴만 읽고 쓴다.
-- 큐는 크기 제한 없이 쌓이는 구조로 만들고, 넣는 쪽은 막히지 않는다. `media.Handler` 구현은 Pion 고루틴에서 호출되므로 이벤트를 큐에 넣고 바로 반환한다.
+- 큐는 크기 제한 없이 쌓이는 구조로 만들고, 넣는 쪽은 막히지 않는다. `Open`에 넘기는 실패 알림 함수는 Pion이 띄운 고루틴에서 호출되므로 이벤트를 큐에 넣고 바로 반환한다.
 - 음성 패킷은 큐를 거치지 않는다.
 
 ### media 계약
 
 | 방향 | 형태 | 내용 |
 | --- | --- | --- |
-| 시그널링 → 미디어 | `media.Driver.Open`과 `media.Conn`의 메서드 | 연결 생성(`Open`)과 종료(`Close`. 그 연결이 낀 구독도 끝난다), 구독 추가(`Subscribe`), offer 생성(`CreateOffer`), answer 적용(`ApplyAnswer`), ICE 후보 추가(`AddCandidate`), 음소거(`SetMuted`) |
-| 미디어 → 시그널링 | `media.Handler`의 메서드. `signaling`이 구현한다 | 연결 상태 변화(`ConnectionStateChanged`) |
+| 시그널링 → 미디어 | `media.Driver.Open`과 `media.Conn`의 메서드 | 연결 생성(`Open`)과 종료(`Close`. 그 연결이 낀 구독도 끝난다), 구독 추가(`Subscribe`), offer 생성(`CreateOffer`), ICE 재시작 표시(`RestartICE`. 다음 `CreateOffer`가 재시작한다), answer 적용(`ApplyAnswer`), ICE 후보 추가(`AddCandidate`), 음소거(`SetMuted`) |
+| 미디어 → 시그널링 | `Open`에 넘기는 함수 | 연결 실패. 실패할 때마다 부르고, `Close` 뒤에도 불릴 수 있다 |
 
 - `Subscribe`는 화자의 음성이 아직 도착하지 않았어도 송신 트랙을 바로 붙인다. 트랙은 입장과 퇴장 때만 바뀌므로, `signaling`이 그때 협상 상태 머신에 변화를 알려 `CreateOffer`를 호출한다.
 - `CreateOffer`가 돌려주는 SDP에는 서버의 ICE 후보가 모두 들어 있다.
