@@ -44,6 +44,10 @@ type fakeDriver struct {
 	publishers []media.Conn
 	// muted has the argument of each SetMuted call.
 	muted []bool
+	// onFailed is what Open got.
+	onFailed func()
+	// restartICE is whether the next offer restarts ICE.
+	restartICE bool
 }
 
 func checkContext(ctx context.Context) error {
@@ -53,7 +57,7 @@ func checkContext(ctx context.Context) error {
 	return nil
 }
 
-func (d *fakeDriver) Open(ctx context.Context, participantID string, _ func()) (media.Conn, error) {
+func (d *fakeDriver) Open(ctx context.Context, participantID string, onFailed func()) (media.Conn, error) {
 	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}
@@ -63,6 +67,7 @@ func (d *fakeDriver) Open(ctx context.Context, participantID string, _ func()) (
 	if d.openErr != nil {
 		return nil, d.openErr
 	}
+	d.onFailed = onFailed
 	return d, nil
 }
 
@@ -82,10 +87,17 @@ func (d *fakeDriver) CreateOffer(ctx context.Context) (string, error) {
 	if d.offerSDP != "" {
 		return d.offerSDP, nil
 	}
-	return fmt.Sprintf("sdp%d", d.offers), nil
+	sdp := fmt.Sprintf("sdp%d", d.offers)
+	if d.restartICE {
+		sdp += " ice-restart"
+		d.restartICE = false
+	}
+	return sdp, nil
 }
 
-func (d *fakeDriver) RestartICE() {}
+func (d *fakeDriver) RestartICE() {
+	d.restartICE = true
+}
 
 func (d *fakeDriver) ApplyAnswer(ctx context.Context, sdp string) error {
 	if err := checkContext(ctx); err != nil {

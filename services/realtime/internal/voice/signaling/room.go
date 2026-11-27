@@ -96,6 +96,10 @@ func (r *room) handle(ctx context.Context, participantID string, data []byte) {
 		if n, ok := r.negotiations[participantID]; ok {
 			n.receiveCandidate(ctx, msg)
 		}
+	case protocol.RestartICE:
+		if n, ok := r.negotiations[participantID]; ok {
+			n.restartICE(ctx)
+		}
 	case protocol.SetMuted:
 		r.setMuted(ctx, participantID, msg.Muted)
 	case protocol.Leave:
@@ -106,13 +110,19 @@ func (r *room) handle(ctx context.Context, participantID string, data []byte) {
 func (r *room) join(ctx context.Context, participantID string) {
 	r.leave(ctx, participantID)
 	logger := r.logger.With("participantId", participantID)
-	conn, err := r.driver.Open(ctx, participantID, func() {})
+	var n *negotiation
+	conn, err := r.driver.Open(ctx, participantID, func() {
+		// The posted function runs on the room goroutine after join returns,
+		// so n is set by then. If the participant has left or joined again
+		// since, n is closed.
+		r.post(func() { n.restartICE(ctx) })
+	})
 	if err != nil {
 		logger.WarnContext(ctx, "open connection failed", "err", err)
 		r.sendMessage(ctx, participantID, connectionFailed("open-connection", "the server could not open the voice connection"))
 		return
 	}
-	n := newNegotiation(
+	n = newNegotiation(
 		conn,
 		func(ctx context.Context, msg protocol.ServerMessage) { r.sendMessage(ctx, participantID, msg) },
 		r.post,
