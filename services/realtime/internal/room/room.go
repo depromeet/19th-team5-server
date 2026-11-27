@@ -374,6 +374,28 @@ func (h *hub) removeIfEmpty(r *room) {
 	delete(h.rooms, r.interviewID)
 }
 
+// shutdown cancels all grace timers and clears active rooms when the server
+// shuts down.
+func (h *hub) shutdown(ctx context.Context) {
+	h.mu.Lock()
+	rooms := make([]*room, 0, len(h.rooms))
+	for _, r := range h.rooms {
+		rooms = append(rooms, r)
+	}
+	clear(h.rooms)
+	h.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, r := range rooms {
+		wg.Add(1)
+		r.post(func() {
+			defer wg.Done()
+			r.shutdown(ctx)
+		})
+	}
+	wg.Wait()
+}
+
 // room runs the state of one interview room on a single goroutine.
 type room struct {
 	hub         *hub
@@ -602,4 +624,15 @@ func (r *room) sendTo(ctx context.Context, c conn, typ string, payload any) {
 		return
 	}
 	c.send(data)
+}
+
+func (r *room) shutdown(_ context.Context) {
+	r.pendingJoins = nil
+	for _, p := range r.participants {
+		if p.graceTimer != nil {
+			p.graceTimer.Stop()
+			p.graceTimer = nil
+		}
+	}
+	clear(r.participants)
 }

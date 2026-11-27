@@ -3,6 +3,7 @@ module github.com/depromeet/19th-team5-server/services/realtime
 go 1.27.4
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/google/go-cmp v0.7.0
 	github.com/pion/ice/v4 v4.4.9
 	github.com/pion/rtp v1.10.6
