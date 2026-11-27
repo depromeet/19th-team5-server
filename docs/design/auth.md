@@ -35,7 +35,7 @@ core만 토큰을 만들고(개인키 서명), realtime은 공개키로 혼자 �
 
 ## 서버별 역할
 
-- core (Java)
+- core (Kotlin)
   - `member`: 회원가입, 내 정보, 비밀번호 변경, 탈퇴, 계정 상태
   - `auth`: 로그인, 액세스 토큰 발급·재발급·로그아웃, WebSocket 티켓 발급, JWKS 공개, 요청마다 액세스 토큰 검증, 로그인 요청 제한
   - `reservation`: 예약, 방 역할 저장, realtime에 참가자 목록 제공 (gRPC)

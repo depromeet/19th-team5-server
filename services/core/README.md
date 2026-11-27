@@ -11,13 +11,13 @@
 
 ## 기술
 
-- Java 21, Spring Boot 4.2, Gradle (Kotlin DSL)
+- Kotlin 2.4 (JVM 21), Spring Boot 4.2, Gradle (Kotlin DSL)
 - PostgreSQL 17, Flyway (`src/main/resources/db/migration`)
 - 테스트: JUnit 5, Testcontainers
 
 ## 실행 방법
 
-필요한 것: JDK 21, Docker
+필요한 것: JDK 21, Docker (Kotlin은 Gradle이 받아 온다)
 
 ```bash
 ./gradlew bootRun
@@ -36,14 +36,15 @@
 
 ## 코드 스타일
 
-[네이버 핵데이 Java 컨벤션](https://github.com/naver/hackday-conventions-java)을 따르고, Spotless로 자동 정리한다. (탭 들여쓰기, 한 줄 120자, import 순서 static → java → javax → org → net → com)
+[Kotlin 공식 코딩 컨벤션](https://kotlinlang.org/docs/coding-conventions.html)을 따르고, Spotless + ktlint로 자동 정리한다.
 
 ```bash
 ./gradlew spotlessApply   # 규칙대로 자동 수정
 ./gradlew spotlessCheck   # 어긋나면 실패
 ```
 
-- IntelliJ: `config/naver-intellij-formatter.xml`을 Settings → Editor → Code Style → Java → Import Scheme으로 불러온다
+- IntelliJ: Settings → Editor → Code Style → Kotlin → Set from… → Kotlin style guide
+- 테스트 이름은 백틱으로 한글 문장을 쓴다. 예: `` fun `없는 경로는 404로 응답한다`() ``
 
 ## 에러 응답
 

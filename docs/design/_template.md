@@ -20,7 +20,7 @@
 
 ## 서버별 역할
 
-- core (Java):
+- core (Kotlin):
 - realtime (Go):
 
 ## 흐름
