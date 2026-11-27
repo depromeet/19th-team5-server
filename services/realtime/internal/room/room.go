@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -48,6 +49,22 @@ type Member struct {
 type ParticipantStore interface {
 	Participants(ctx context.Context, interviewID string) ([]Member, error)
 }
+
+// VoiceRoom handles voice.* signaling messages for one interview room.
+type VoiceRoom interface {
+	// Receive handles a serialized voice.* message from participantID without blocking.
+	Receive(ctx context.Context, participantID string, data []byte)
+	// Leave removes participantID from voice signaling and closes its media connection.
+	Leave(ctx context.Context, participantID string)
+	// Disconnect notifies voice signaling that participantID's WebSocket was lost.
+	Disconnect(ctx context.Context, participantID string)
+	// Reconnect notifies voice signaling that participantID's WebSocket is back.
+	Reconnect(ctx context.Context, participantID string)
+}
+
+// VoiceRoomFactory creates a [VoiceRoom] for a new interview room. send
+// delivers a serialized voice.* message to participantID without blocking.
+type VoiceRoomFactory func(send func(ctx context.Context, participantID string, msg []byte)) VoiceRoom
 
 const (
 	defaultGracePeriod         = 30 * time.Second
@@ -211,7 +228,6 @@ type session struct {
 	mu    sync.Mutex
 	state sessionState
 	room  *room
-	pid   string
 }
 
 func (h *hub) newSession(memberID string, c conn) *session {
@@ -235,8 +251,26 @@ func (s *session) handleMessage(ctx context.Context, data []byte) {
 	case typeLeave:
 		s.handleLeave(ctx)
 	default:
+		if strings.HasPrefix(typ, "voice.") && s.hub.newVoiceRoom != nil {
+			s.handleVoice(ctx, data)
+			return
+		}
 		s.sendError(&parseError{cause: causeUnknownType, field: "/type"})
 	}
+}
+
+func (s *session) handleVoice(ctx context.Context, data []byte) {
+	s.mu.Lock()
+	if s.state != sessionJoined {
+		s.mu.Unlock()
+		s.sendError(&parseError{cause: causeNotJoined})
+		return
+	}
+	r := s.room
+	s.mu.Unlock()
+
+	voiceCtx := context.WithoutCancel(ctx)
+	r.post(func() { r.handleVoiceMessage(voiceCtx, s.memberID, s.conn, data) })
 }
 
 func (s *session) handleJoin(ctx context.Context, payload jsontext.Value) {
@@ -275,11 +309,10 @@ func (s *session) handleLeave(ctx context.Context) {
 	r.post(func() { r.handleLeave(leaveCtx, s.memberID, s.conn) })
 }
 
-func (s *session) markJoined(r *room, pid string) {
+func (s *session) markJoined(r *room) {
 	s.mu.Lock()
 	s.state = sessionJoined
 	s.room = r
-	s.pid = pid
 	s.mu.Unlock()
 }
 
@@ -308,6 +341,7 @@ func (s *session) sendError(e *parseError) {
 // Lock order: hub.mu -> room.mu.
 type hub struct {
 	store               ParticipantStore
+	newVoiceRoom        VoiceRoomFactory
 	logger              *slog.Logger
 	gracePeriod         time.Duration
 	participantsTimeout time.Duration
@@ -317,9 +351,6 @@ type hub struct {
 }
 
 func newHub(store ParticipantStore, logger *slog.Logger) *hub {
-	if logger == nil {
-		logger = slog.Default()
-	}
 	return &hub{
 		store:               store,
 		logger:              logger,
@@ -355,6 +386,15 @@ func (h *hub) fetchParticipants(ctx context.Context, r *room, interviewID string
 	defer cancel()
 	members, err := h.store.Participants(fetchCtx, interviewID)
 	r.post(func() { r.handleParticipantsLoaded(ctx, members, err) })
+}
+
+// removeRoom unconditionally removes r from h.rooms if it is still registered.
+func (h *hub) removeRoom(r *room) {
+	h.mu.Lock()
+	if h.rooms[r.interviewID] == r {
+		delete(h.rooms, r.interviewID)
+	}
+	h.mu.Unlock()
 }
 
 // removeIfEmpty deletes r from h.rooms if r has no pending work in its queue
@@ -407,12 +447,16 @@ type room struct {
 	busy  bool
 
 	// The fields below are accessed only on the room goroutine.
-	loading      bool
-	pendingJoins []*session
-	members      map[string]Member
-	memberToPID  map[string]string
-	nextPID      int
-	participants map[string]*participant
+	loading       bool
+	loadErrCode   int
+	loadErrReason string
+	pendingJoins  []*session
+	members       map[string]Member
+	memberToPID   map[string]string
+	pidToMember   map[string]string
+	nextPID       int
+	participants  map[string]*participant
+	voice         VoiceRoom
 }
 
 type participant struct {
@@ -426,15 +470,42 @@ type participant struct {
 }
 
 func newRoom(h *hub, interviewID string) *room {
-	return &room{
+	r := &room{
 		hub:          h,
 		interviewID:  interviewID,
 		logger:       h.logger.With("interviewId", interviewID),
 		loading:      true,
 		members:      make(map[string]Member),
 		memberToPID:  make(map[string]string),
+		pidToMember:  make(map[string]string),
 		participants: make(map[string]*participant),
 	}
+	if h.newVoiceRoom != nil {
+		r.voice = h.newVoiceRoom(r.sendToParticipant)
+	}
+	return r
+}
+
+func (r *room) sendToParticipant(_ context.Context, participantID string, msg []byte) {
+	r.post(func() {
+		memberID, ok := r.pidToMember[participantID]
+		if !ok {
+			return
+		}
+		p, ok := r.participants[memberID]
+		if !ok || p.state != StateConnected || p.conn == nil {
+			return
+		}
+		p.conn.send(msg)
+	})
+}
+
+func (r *room) handleVoiceMessage(ctx context.Context, memberID string, c conn, data []byte) {
+	p, ok := r.participants[memberID]
+	if !ok || p.conn != c || r.voice == nil {
+		return
+	}
+	r.voice.Receive(ctx, p.pid, data)
 }
 
 func (r *room) post(f func()) {
@@ -450,23 +521,27 @@ func (r *room) post(f func()) {
 func (r *room) run() {
 	for {
 		r.mu.Lock()
-		fs := r.queue
-		r.queue = nil
-		if len(fs) == 0 {
+		if len(r.queue) == 0 {
+			r.queue = nil
 			r.busy = false
 			r.mu.Unlock()
 			return
 		}
+		f := r.queue[0]
+		r.queue[0] = nil
+		r.queue = r.queue[1:]
 		r.mu.Unlock()
-		for _, f := range fs {
-			f()
-		}
+		f()
 	}
 }
 
 func (r *room) handleJoin(ctx context.Context, s *session) {
 	if r.loading {
 		r.pendingJoins = append(r.pendingJoins, s)
+		return
+	}
+	if r.loadErrCode != 0 {
+		s.conn.close(r.loadErrCode, r.loadErrReason)
 		return
 	}
 	r.applyJoin(ctx, s)
@@ -482,11 +557,13 @@ func (r *room) handleParticipantsLoaded(ctx context.Context, members []Member, e
 		if errors.Is(err, ErrRoomNotOpen) {
 			code, reason = closeRoomNotOpen, "ROOM_NOT_OPEN"
 		}
+		r.loadErrCode = code
+		r.loadErrReason = reason
+		r.hub.removeRoom(r)
 		r.logger.WarnContext(ctx, "load participants failed", "err", err)
 		for _, s := range pending {
 			s.conn.close(code, reason)
 		}
-		r.hub.removeIfEmpty(r)
 		return
 	}
 
@@ -513,8 +590,10 @@ func (r *room) applyJoin(ctx context.Context, s *session) {
 		r.nextPID++
 		pid = fmt.Sprintf("p%d", r.nextPID)
 		r.memberToPID[s.memberID] = pid
+		r.pidToMember[pid] = s.memberID
 	}
 
+	reconnected := false
 	if existing, ok := r.participants[s.memberID]; ok {
 		if existing.state == StateConnected {
 			existing.conn.close(closeReplaced, "REPLACED")
@@ -524,6 +603,7 @@ func (r *room) applyJoin(ctx context.Context, s *session) {
 		}
 		existing.state = StateConnected
 		existing.conn = s.conn
+		reconnected = true
 	} else {
 		r.participants[s.memberID] = &participant{
 			pid:    pid,
@@ -534,9 +614,12 @@ func (r *room) applyJoin(ctx context.Context, s *session) {
 		}
 	}
 
-	s.markJoined(r, pid)
+	s.markJoined(r)
 	r.sendTo(ctx, s.conn, typeJoined, joinedPayload{ParticipantID: pid})
 	r.broadcastParticipants(ctx)
+	if reconnected && r.voice != nil {
+		r.voice.Reconnect(ctx, pid)
+	}
 }
 
 func (r *room) handleDisconnect(ctx context.Context, memberID string, c conn) {
@@ -558,6 +641,9 @@ func (r *room) handleDisconnect(ctx context.Context, memberID string, c conn) {
 	p.graceTimer = time.AfterFunc(r.hub.gracePeriod, func() {
 		r.post(func() { r.handleGraceExpired(timerCtx, memberID, gen) })
 	})
+	if r.voice != nil {
+		r.voice.Disconnect(ctx, p.pid)
+	}
 	r.broadcastParticipants(ctx)
 }
 
@@ -567,6 +653,9 @@ func (r *room) handleGraceExpired(ctx context.Context, memberID string, gen int)
 		return
 	}
 	delete(r.participants, memberID)
+	if r.voice != nil {
+		r.voice.Leave(ctx, p.pid)
+	}
 	r.broadcastParticipants(ctx)
 	if len(r.participants) == 0 {
 		r.hub.removeIfEmpty(r)
@@ -579,6 +668,9 @@ func (r *room) handleLeave(ctx context.Context, memberID string, c conn) {
 		return
 	}
 	delete(r.participants, memberID)
+	if r.voice != nil {
+		r.voice.Leave(ctx, p.pid)
+	}
 	c.close(closeNormal, "")
 	r.broadcastParticipants(ctx)
 	if len(r.participants) == 0 {
@@ -626,12 +718,15 @@ func (r *room) sendTo(ctx context.Context, c conn, typ string, payload any) {
 	c.send(data)
 }
 
-func (r *room) shutdown(_ context.Context) {
+func (r *room) shutdown(ctx context.Context) {
 	r.pendingJoins = nil
 	for _, p := range r.participants {
 		if p.graceTimer != nil {
 			p.graceTimer.Stop()
 			p.graceTimer = nil
+		}
+		if r.voice != nil {
+			r.voice.Leave(ctx, p.pid)
 		}
 	}
 	clear(r.participants)

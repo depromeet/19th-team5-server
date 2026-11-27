@@ -25,6 +25,9 @@ type TicketVerifier interface {
 type Options struct {
 	Logger         *slog.Logger
 	OriginPatterns []string
+	// NewVoiceRoom creates a voice room for each interview room. If nil,
+	// voice.* messages are rejected as unknown-type.
+	NewVoiceRoom VoiceRoomFactory
 	// PingInterval is how often the server sends WebSocket pings. Defaults to 10s.
 	PingInterval time.Duration
 	// GracePeriod is how long a disconnected participant stays in RECONNECTING
@@ -53,6 +56,7 @@ func NewServer(verifier TicketVerifier, store ParticipantStore, opts Options) *S
 		logger = slog.Default()
 	}
 	h := newHub(store, logger)
+	h.newVoiceRoom = opts.NewVoiceRoom
 	if opts.GracePeriod > 0 {
 		h.gracePeriod = opts.GracePeriod
 	}

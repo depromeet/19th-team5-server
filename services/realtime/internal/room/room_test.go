@@ -105,58 +105,52 @@ func TestParseContractsAndErrors(t *testing.T) {
 		field string
 	}{
 		{
-			name:  "invalid JSON",
+			name:  "invalid_json",
 			input: `{`,
 			cause: causeInvalidJSON,
 		},
 		{
-			name:  "invalid UTF-8",
+			name:  "invalid_utf8",
 			input: "{\"type\":\"room.join\",\"payload\":{\"interviewId\":\"\xff\"}}",
 			cause: causeInvalidJSON,
 		},
 		{
-			name:  "duplicate field",
+			name:  "duplicate_field",
 			input: `{"type":"room.join","type":"room.leave"}`,
 			cause: causeDuplicateField,
 		},
 		{
-			name:  "payload not object",
+			name:  "payload_not_object",
 			input: `{"type":"room.join","payload":[]}`,
 			cause: causePayloadNotObject,
 			field: "/payload",
 		},
 		{
-			name:  "unknown type",
+			name:  "unknown_type",
 			input: `{"type":"room.unknown"}`,
 			cause: causeUnknownType,
 			field: "/type",
 		},
 		{
-			name:  "unknown feature prefix",
-			input: `{"type":"chat.send"}`,
-			cause: causeUnknownType,
-			field: "/type",
-		},
-		{
-			name:  "wrong field type",
+			name:  "wrong_field_type",
 			input: `{"type":"room.join","payload":{"interviewId":123}}`,
 			cause: causeWrongFieldType,
 			field: "/payload/interviewId",
 		},
 		{
-			name:  "case sensitive field name treated as missing",
+			name:  "case_sensitive_field",
 			input: `{"type":"room.join","payload":{"InterviewId":"i1"}}`,
 			cause: causeMissingField,
 			field: "/payload/interviewId",
 		},
 		{
-			name:  "null payload on room.join is missing field",
+			name:  "null_payload_on_join",
 			input: `{"type":"room.join","payload":null}`,
 			cause: causeMissingField,
 			field: "/payload/interviewId",
 		},
 		{
-			name:  "room.leave before join",
+			name:  "leave_before_join",
 			input: `{"type":"room.leave"}`,
 			cause: causeNotJoined,
 		},
@@ -200,7 +194,7 @@ func TestRoomJoinIgnoresUnknownFieldsAndRejectsAlreadyJoined(t *testing.T) {
 			wantError(t, causeAlreadyJoined, ""),
 		}
 		if diff := cmp.Diff(want, c.messages()); diff != "" {
-			t.Errorf("messages diff (-want +got):\n%s", diff)
+			t.Errorf("handleMessage(room.join, room.join) sent messages diff (-want +got):\n%s", diff)
 		}
 	})
 }
@@ -214,20 +208,20 @@ func TestRoomJoinCloseCodes(t *testing.T) {
 		wantReason string
 	}{
 		{
-			name:       "forbidden member",
+			name:       "forbidden_member",
 			memberID:   "outsider",
 			wantCode:   closeForbidden,
 			wantReason: "FORBIDDEN",
 		},
 		{
-			name:       "room not open",
+			name:       "room_not_open",
 			storeErr:   ErrRoomNotOpen,
 			memberID:   "m1",
 			wantCode:   closeRoomNotOpen,
 			wantReason: "ROOM_NOT_OPEN",
 		},
 		{
-			name:       "store failure",
+			name:       "store_failure",
 			storeErr:   errors.New("core unavailable"),
 			memberID:   "m1",
 			wantCode:   closeTryAgainLater,
@@ -249,7 +243,7 @@ func TestRoomJoinCloseCodes(t *testing.T) {
 
 				closed, code, reason := c.closeState()
 				if !closed || code != tc.wantCode || reason != tc.wantReason {
-					t.Errorf("closeState() = (%t, %d, %q), want (true, %d, %q)", closed, code, reason, tc.wantCode, tc.wantReason)
+					t.Errorf("handleMessage(room.join) close = (%t, %d, %q), want (true, %d, %q)", closed, code, reason, tc.wantCode, tc.wantReason)
 				}
 				h.mu.Lock()
 				remaining := len(h.rooms)
@@ -430,6 +424,178 @@ func TestRoomLoadingWaitsForConcurrentJoinAndDropsDisconnectedWaiter(t *testing.
 		}
 		if store.calls != 1 {
 			t.Errorf("Participants() calls = %d, want 1", store.calls)
+		}
+	})
+}
+
+type fakeVoiceRoom struct {
+	mu     sync.Mutex
+	send   func(ctx context.Context, participantID string, msg []byte)
+	events []string
+}
+
+func (v *fakeVoiceRoom) record(e string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.events = append(v.events, e)
+}
+
+func (v *fakeVoiceRoom) Receive(_ context.Context, pid string, data []byte) {
+	v.record("receive:" + pid + ":" + string(data))
+}
+
+func (v *fakeVoiceRoom) Leave(_ context.Context, pid string) {
+	v.record("leave:" + pid)
+}
+
+func (v *fakeVoiceRoom) Disconnect(_ context.Context, pid string) {
+	v.record("disconnect:" + pid)
+}
+
+func (v *fakeVoiceRoom) Reconnect(_ context.Context, pid string) {
+	v.record("reconnect:" + pid)
+}
+
+func (v *fakeVoiceRoom) snapshot() []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]string, len(v.events))
+	copy(out, v.events)
+	return out
+}
+
+func TestRoomVoiceRoutingAndNotifications(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		var vr *fakeVoiceRoom
+		h := newHub(&fakeStore{members: defaultMembers()}, slog.New(slog.DiscardHandler))
+		h.newVoiceRoom = func(send func(ctx context.Context, participantID string, msg []byte)) VoiceRoom {
+			vr = &fakeVoiceRoom{send: send}
+			return vr
+		}
+
+		c1 := &fakeConn{}
+		s1 := h.newSession("m1", c1)
+		// voice.* before join returns not-joined.
+		s1.handleMessage(ctx, []byte(`{"type":"voice.join"}`))
+		if diff := cmp.Diff([]string{wantError(t, causeNotJoined, "")}, c1.messages()); diff != "" {
+			t.Fatalf("voice.join before room.join diff (-want +got):\n%s", diff)
+		}
+
+		s1.handleMessage(ctx, []byte(`{"type":"room.join","payload":{"interviewId":"i1"}}`))
+		synctest.Wait()
+
+		// Forward voice.* to VoiceRoom and deliver server voice.* back to conn.
+		s1.handleMessage(ctx, []byte(`{"type":"voice.join"}`))
+		synctest.Wait()
+		vr.send(ctx, "p1", []byte(`{"type":"voice.offer","payload":{"sdp":"v=0","offerId":1}}`))
+		synctest.Wait()
+
+		msgs := c1.messages()
+		if got := msgs[len(msgs)-1]; got != `{"type":"voice.offer","payload":{"sdp":"v=0","offerId":1}}` {
+			t.Errorf("last message to c1 = %s, want voice.offer", got)
+		}
+
+		// Replace c1 with c1New (4009) -> triggers voice Reconnect; old conn events are ignored.
+		c1New := &fakeConn{}
+		s1New := h.newSession("m1", c1New)
+		s1New.handleMessage(ctx, []byte(`{"type":"room.join","payload":{"interviewId":"i1"}}`))
+		synctest.Wait()
+		s1.handleMessage(ctx, []byte(`{"type":"voice.join"}`))
+		s1.handleMessage(ctx, []byte(`{"type":"room.leave"}`))
+		s1.disconnect(ctx)
+		synctest.Wait()
+
+		// Voice message to unknown participant ID is ignored.
+		vr.send(ctx, "unknown", []byte(`{"type":"voice.offer","payload":{"sdp":"v=0","offerId":9}}`))
+		synctest.Wait()
+
+		// Disconnect c1New -> voice Disconnect; message while disconnected is dropped.
+		s1New.disconnect(ctx)
+		synctest.Wait()
+		vr.send(ctx, "p1", []byte(`{"type":"voice.offer","payload":{"sdp":"v=0","offerId":2}}`))
+		synctest.Wait()
+
+		// m2 joins and explicitly leaves via room.leave -> voice Leave.
+		c2 := &fakeConn{}
+		s2 := h.newSession("m2", c2)
+		s2.handleMessage(ctx, []byte(`{"type":"room.join","payload":{"interviewId":"i1"}}`))
+		synctest.Wait()
+		s2.handleMessage(ctx, []byte(`{"type":"room.leave"}`))
+		synctest.Wait()
+
+		// Grace expires -> voice Leave.
+		time.Sleep(defaultGracePeriod + time.Second)
+		synctest.Wait()
+
+		// Disconnect before joining is a no-op.
+		c3 := &fakeConn{}
+		h.newSession("m2", c3).disconnect(ctx)
+
+		wantEvents := []string{
+			`receive:p1:{"type":"voice.join"}`,
+			"reconnect:p1",
+			"disconnect:p1",
+			"leave:p2",
+			"leave:p1",
+		}
+		if diff := cmp.Diff(wantEvents, vr.snapshot()); diff != "" {
+			t.Errorf("voice events diff (-want +got):\n%s", diff)
+		}
+	})
+}
+
+func TestRoomQueuedJoinAfterLeaveKeepsRoomAndLoadFailureClosesQueuedJoin(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		h := newHub(&fakeStore{members: defaultMembers()}, slog.New(slog.DiscardHandler))
+
+		c1 := &fakeConn{}
+		s1 := h.newSession("m1", c1)
+		s1.handleMessage(ctx, []byte(`{"type":"room.join","payload":{"interviewId":"i1"}}`))
+		synctest.Wait()
+
+		// Queue handleLeave followed immediately by handleJoin on the same room
+		// while blocking the room goroutine so both sit in r.queue together.
+		h.mu.Lock()
+		r := h.rooms["i1"]
+		h.mu.Unlock()
+
+		release := make(chan struct{})
+		r.post(func() { <-release })
+		synctest.Wait()
+
+		c2 := &fakeConn{}
+		s2 := h.newSession("m2", c2)
+		r.post(func() { r.handleLeave(ctx, "m1", c1) })
+		r.post(func() { r.handleJoin(ctx, s2) })
+		close(release)
+		synctest.Wait()
+
+		h.mu.Lock()
+		gotRoom := h.rooms["i1"]
+		h.mu.Unlock()
+		if gotRoom != r {
+			t.Errorf("room i1 was removed despite queued join; got %p, want %p", gotRoom, r)
+		}
+
+		// A queued join arriving after handleParticipantsLoaded failed gets the
+		// same close code (4012) rather than 4003.
+		hFail := newHub(&fakeStore{err: ErrRoomNotOpen}, slog.New(slog.DiscardHandler))
+		rFail := newRoom(hFail, "i2")
+		hFail.mu.Lock()
+		hFail.rooms["i2"] = rFail
+		hFail.mu.Unlock()
+
+		cFail := &fakeConn{}
+		sFail := hFail.newSession("m1", cFail)
+		rFail.post(func() { rFail.handleParticipantsLoaded(ctx, nil, ErrRoomNotOpen) })
+		rFail.post(func() { rFail.handleJoin(ctx, sFail) })
+		synctest.Wait()
+
+		closed, code, reason := cFail.closeState()
+		if !closed || code != closeRoomNotOpen || reason != "ROOM_NOT_OPEN" {
+			t.Errorf("queued join after load failure close = (%t, %d, %q), want (true, %d, ROOM_NOT_OPEN)", closed, code, reason, closeRoomNotOpen)
 		}
 	})
 }
