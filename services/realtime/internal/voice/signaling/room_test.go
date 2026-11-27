@@ -27,7 +27,7 @@ type roomHarness struct {
 // fakeDrivers opens the connection of each participant on its own fakeDriver.
 type fakeDrivers map[string]*fakeDriver
 
-func (d fakeDrivers) Open(ctx context.Context, participantID string) (media.Conn, error) {
+func (d fakeDrivers) Open(ctx context.Context, participantID string, _ func()) (media.Conn, error) {
 	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}

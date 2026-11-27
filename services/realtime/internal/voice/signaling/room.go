@@ -106,7 +106,7 @@ func (r *room) handle(ctx context.Context, participantID string, data []byte) {
 func (r *room) join(ctx context.Context, participantID string) {
 	r.leave(ctx, participantID)
 	logger := r.logger.With("participantId", participantID)
-	conn, err := r.driver.Open(ctx, participantID)
+	conn, err := r.driver.Open(ctx, participantID, func() {})
 	if err != nil {
 		logger.WarnContext(ctx, "open connection failed", "err", err)
 		r.sendMessage(ctx, participantID, connectionFailed("open-connection", "the server could not open the voice connection"))

@@ -53,7 +53,7 @@ func checkContext(ctx context.Context) error {
 	return nil
 }
 
-func (d *fakeDriver) Open(ctx context.Context, participantID string) (media.Conn, error) {
+func (d *fakeDriver) Open(ctx context.Context, participantID string, _ func()) (media.Conn, error) {
 	if err := checkContext(ctx); err != nil {
 		return nil, err
 	}
@@ -84,6 +84,8 @@ func (d *fakeDriver) CreateOffer(ctx context.Context) (string, error) {
 	}
 	return fmt.Sprintf("sdp%d", d.offers), nil
 }
+
+func (d *fakeDriver) RestartICE() {}
 
 func (d *fakeDriver) ApplyAnswer(ctx context.Context, sdp string) error {
 	if err := checkContext(ctx); err != nil {
