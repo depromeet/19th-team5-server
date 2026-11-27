@@ -137,7 +137,7 @@ stateDiagram-v2
 | --- | --- | --- |
 | `interviewId` | string | 면접 ID. core의 예약 데이터에서 정한 값이다 |
 | `participantId` | string | 방 참가자 ID |
-| `participants` | array | 참가자마다 `participantId`, `nickname`, `role`(`INTERVIEWER`, `INTERVIEWEE`), `status`(`CONNECTED`, `RECONNECTING`) |
+| `participants` | array | 참가자마다 `participantId`, `nickname`, `role`(`INTERVIEWER`, `INTERVIEWEE`), `state`(`CONNECTED`, `RECONNECTING`) |
 
 `room.error`의 `INVALID_MESSAGE`는 아래 경우에 보낸다. `metadata`에는 `cause`와 `field`가 있다.
 
