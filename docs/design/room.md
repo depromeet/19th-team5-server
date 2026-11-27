@@ -26,7 +26,7 @@
 
 ## 서버별 역할
 
-- core (Java): WebSocket 티켓 발급, 참가자 목록 제공(gRPC `GetParticipants`)
+- core (Kotlin): WebSocket 티켓 발급, 참가자 목록 제공(gRPC `GetParticipants`)
 - realtime (Go): WebSocket 연결과 티켓 검증, 면접방 상태(참가자, 연결 상태), 방 안 기능으로 메시지 전달
 
 ## 흐름
@@ -84,7 +84,7 @@ stateDiagram-v2
 
 - 실시간 서버는 10초마다 WebSocket ping을 보내고, 다음 ping을 보낼 때까지 pong이 없으면 연결이 끊긴 것으로 본다. 브라우저는 ping에 자동으로 pong을 보낸다. 10초는 초기값이다.
 - 연결이 끊기면 참가자를 `RECONNECTING`으로 바꾸고 나머지 참가자에게 목록을 보낸다. 유예 중에 그 참가자에게 보낼 메시지는 버린다.
-- 같은 계정이 30초 안에 같은 방으로 `room.join`을 보내면 `CONNECTED`로 돌아가고 같은 참가자 ID를 받는다. 음성 서버에 다시 붙었다고 알리고, 음성 서버는 끊긴 동안 보내지 못한 offer를 다시 보낸다([음성 통화 설계](voice.md) "장애와 복구").
+- 같은 계정이 30초 안에 같은 방으로 `room.join`을 보내면 `CONNECTED`로 돌아가고 같은 참가자 ID를 받는다. 음성 서버에 다시 붙었다고 알리고, 음성 서버는 끊긴 동안 보내지 못한 offer와 다른 참가자의 현재 음소거 상태(`voice.muted`)를 다시 보낸다([음성 통화 설계](voice.md) "장애와 복구").
 - 30초가 지나면 퇴장으로 처리한다. 30초는 초기값이다.
 - 연결이 끊기면 브라우저는 티켓을 새로 받아 다시 연결하고 `room.join`을 보낸다. 간격과 횟수는 인증/인가 설계의 재연결 규칙을 따른다.
 
@@ -93,7 +93,7 @@ stateDiagram-v2
 같은 계정이 같은 방에 새 연결로 `room.join`을 보내면 새 연결이 이전 연결을 대신한다.
 
 - 이전 연결이 아직 열려 있으면 `4009 REPLACED`로 닫는다. 새 탭을 연 경우와, 끊긴 연결을 서버가 아직 알아채지 못했는데 브라우저가 다시 붙은 경우가 해당한다.
-- 참가자 ID와 음성 연결은 그대로 둔다. 새 탭은 `voice.join`으로 음성 연결을 새로 만들고, 다시 붙은 같은 탭은 기존 음성 연결을 계속 쓴다.
+- 참가자 ID와 음성 연결은 그대로 둔다. 기존 연결을 대신할 때도 음성 서버에 다시 붙음을 알려, 서버가 ping으로 끊김을 알아채기 전에 브라우저가 재접속해 유실된 offer가 있으면 다시 보낸다. 새 탭은 `voice.join`으로 음성 연결을 새로 만들고, 다시 붙은 같은 탭은 기존 음성 연결을 계속 쓴다. 교체되어 닫히는 이전 연결의 종료는 무시한다.
 - `4009`를 받은 브라우저는 다시 연결하지 않고 자기 `RTCPeerConnection`을 닫는다. 다시 연결하면 두 탭이 서로를 계속 밀어낸다.
 
 ### 퇴장
@@ -112,7 +112,7 @@ stateDiagram-v2
 
 | 보내는 쪽 → 받는 쪽 | 내용 |
 | --- | --- |
-| 실시간 서버 → 음성 서버 | 퇴장(`room.leave`, 유예 만료), 다시 붙음, 들어온 `voice.*` 메시지 |
+| 실시간 서버 → 음성 서버 | 퇴장(`room.leave`, 유예 만료), 끊김, 다시 붙음, 들어온 `voice.*` 메시지 |
 | 음성 서버 → 실시간 서버 | 참가자 한 명에게 보낼 `voice.*` 메시지 |
 
 음성 입장은 방 입장과 따로다. 브라우저는 `room.joined`를 받은 뒤 마이크 권한을 받고 `voice.join`을 보낸다.
@@ -135,18 +135,18 @@ stateDiagram-v2
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `interviewId` | string | 면접 ID. core의 예약 데이터에서 정한 값이다 |
+| `interviewId` | string | 면접 ID. 필수이며 빈 문자열을 허용하지 않는다. core의 예약 데이터에서 정한 값이다 |
 | `participantId` | string | 방 참가자 ID |
 | `participants` | array | 참가자마다 `participantId`, `nickname`, `role`(`INTERVIEWER`, `INTERVIEWEE`), `state`(`CONNECTED`, `RECONNECTING`) |
 
 `room.error`의 `INVALID_MESSAGE`는 아래 경우에 보낸다. `metadata`에는 `cause`와 `field`가 있다.
 
-| 경우 | `cause` |
-| --- | --- |
-| JSON 형식 오류, 잘못된 UTF-8, 같은 필드 이름이 두 번 나오는 객체, 객체가 아닌 `payload`, 필드 타입이나 값 오류 | 음성 시그널링과 같다 |
-| 접두사를 아는 기능이 없거나, `room.` 뒤의 타입을 모름 | `unknown-type` |
-| `room.joined`를 받기 전에 다른 메시지를 보냄 | `not-joined` |
-| 같은 연결에서 `room.join`을 또 보냄 | `already-joined` |
+| 경우 | `cause` | `field` |
+| --- | --- | --- |
+| JSON 형식 오류, 잘못된 UTF-8, 같은 필드 이름이 두 번 나오는 객체, 객체가 아닌 `payload`, 필드 타입 오류, 필수 필드 누락(`interviewId` 누락·빈 문자열) | 음성 시그널링과 같다 | 음성 시그널링과 같다(`/payload/interviewId` 등) |
+| 접두사를 아는 기능이 없거나, `room.` 뒤의 타입을 모름 | `unknown-type` | `/type` |
+| `room.joined`를 받기 전에 다른 메시지를 보냄 | `not-joined` | 빈 문자열 |
+| 같은 연결에서 `room.join`을 또 보냄 | `already-joined` | 빈 문자열 |
 
 **종료 코드**
 
@@ -155,6 +155,7 @@ RFC 6455 7.4.2절은 4000~4999를 애플리케이션끼리 미리 정해 쓰는 
 | 코드 | 언제 | 브라우저가 할 일 |
 | --- | --- | --- |
 | `1000` | `room.leave` 뒤 | 없음 |
+| `1001 Going Away` | 서버 종료 또는 재시작 | 재연결 규칙대로 다시 연결 |
 | `1013 Try Again Later` | core가 참가자 목록에 응답하지 않음 | 재연결 규칙대로 다시 연결 |
 | `4003 FORBIDDEN` | 참가자 목록에 없는 계정 | 다시 연결하지 않음 |
 | `4009 REPLACED` | 같은 계정의 새 연결이 대신함 | 다시 연결하지 않고 `RTCPeerConnection`을 닫음 |
@@ -171,3 +172,5 @@ RFC 6455 7.4.2절은 4000~4999를 애플리케이션끼리 미리 정해 쓰는 
 - [ADR-0006: 방 역할은 토큰에 넣지 않고 예약 데이터에서 받는다](../adr/0006-auth-room-role-from-reservation.md)
 - [ADR-0007: WebSocket은 일회용 티켓으로 인증한다](../adr/0007-auth-websocket-ticket.md)
 - [ADR-0018: 음성 시그널링은 서버만 offer를 만들고 W3C 이름과 AIP-193 에러 형식을 쓴다](../adr/0018-voice-signaling.md)
+- [ADR-0020: 면접방 입장은 연결 뒤 메시지로 하고, 참가자 목록은 바뀔 때마다 전체를 보낸다](../adr/0020-room-join-by-message-and-send-whole-list.md)
+- [ADR-0021: 실시간 서버 WebSocket은 coder/websocket을 쓴다](../adr/0021-realtime-use-coder-websocket.md)

@@ -12,7 +12,7 @@
 services/realtime/
 ├── cmd/realtime/          # main. 설정을 읽고 패키지를 조립한다
 └── internal/
-    ├── ...                # 실시간 서버 패키지. 실시간 서버 설계에서 정한다
+    ├── room/              # WebSocket 연결, 티켓 검증, 면접방 상태, 메시지 라우팅
     └── voice/             # 음성 서버. 설계는 docs/design/voice.md
         ├── protocol/      # voice.* 메시지 타입과 JSON 변환
         ├── signaling/     # 방 작업 큐, 방 상태, 구독 정책, 협상 상태 머신
@@ -26,7 +26,7 @@ services/realtime/
 ```mermaid
 flowchart TD
     main["cmd/realtime"]
-    rt["실시간 서버 패키지"]
+    rt["room"]
     sig["voice/signaling"]
     pion["voice/media/pion"]
     media["voice/media"]
@@ -36,7 +36,6 @@ flowchart TD
     main --> rt
     main --> sig
     main --> pion
-    rt --> sig
     sig --> proto
     sig --> media
     pion --> media
@@ -50,8 +49,8 @@ flowchart TD
 1. 위 그림의 화살표를 거스르는 import는 하지 않는다. 지금은 리뷰로 확인하고, 자동 검사 방법은 아직 정하지 않았다.
 2. `protocol`, `media`, `relay`는 다른 음성 패키지를 import하지 않는다.
 3. Pion은 `media/pion`과 `relay`에서만 import한다. `media` 계약에는 Pion 타입이 나오지 않는다.
-4. 실시간 서버 패키지는 `signaling`만 import한다. 음성 서버는 실시간 서버 패키지를 import하지 않는다. 음성 서버가 클라이언트에 메시지를 보내는 방법은 실시간 서버와 연결할 때 정한다.
-5. 구현체를 만들어 연결하는 코드는 `cmd/realtime`에만 둔다. 다른 패키지는 생성자로 받은 인터페이스만 쓴다. 예외로 `signaling`의 통합 테스트는 `media/pion`으로 실제 연결을 만든다.
+4. `room`과 `voice` 패키지는 서로 import하지 않는다. `room`은 음성 방을 자신의 인터페이스로 받고, `cmd/realtime`이 `voice/signaling`을 조립해 넘긴다.
+5. 구현체를 만들어 연결하는 코드는 `cmd/realtime`에만 둔다. 다른 패키지는 생성자로 받은 인터페이스만 쓴다. 예외로 `signaling`의 통합 테스트는 `media/pion`과 가짜 클라이언트용 Pion 패키지로, `room`의 외부 통합 테스트(`room_test`)는 `signaling`, `voice/protocol`, `media/pion`과 가짜 클라이언트용 Pion 패키지로 실제 연결을 만든다.
 6. 디렉터리 중첩은 '부모는 계약, 자식은 구현'일 때만 쓴다. `media`와 `media/pion`만 해당한다. `voice/`에는 Go 코드를 두지 않는다.
 7. 인터페이스는 쓰는 쪽 패키지에 둔다. 예외는 `media` 계약 하나다. 구현이 이름을 써야 하는 타입(`Open`이 돌려주는 `Conn`, `AddCandidate`가 받는 `Candidate`)이 있어, 쓰는 쪽인 `signaling`에 두면 `media/pion`이 `signaling`을 import하게 된다.
 
@@ -75,4 +74,16 @@ flowchart TD
 
 ## 실행 방법
 
-- 추후 작성
+core의 티켓 발급·참가자 목록이 연결되기 전에는 `-dev` 플래그로 로컬 개발용 구현을 띄운다.
+
+```bash
+cd services/realtime
+go run ./cmd/realtime -dev
+```
+
+주요 플래그:
+
+- `-http` (기본 `127.0.0.1:8080`): HTTP/WebSocket 리슨 주소 (`/ws?ticket=<회원 ID>`)
+- `-voice_udp` (기본 `127.0.0.1:50000`): 음성 UDP 리슨 주소
+- `-origins` (기본 비어 있음): 쉼표로 구분된 허용 WebSocket Origin 패턴
+- `-dev` (기본 `false`): 개발용 티켓 검증(티켓을 그대로 회원 ID로 사용)과 고정 참가자 목록(`m1`~`m4`) 사용
