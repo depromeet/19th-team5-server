@@ -25,6 +25,8 @@
 
 - `compose.yaml`의 PostgreSQL을 Spring Boot가 자동으로 띄우고 연결한다
 - 헬스 체크: `GET /actuator/health`
+- 프로필을 정하지 않으면 `local`로 켜진다. `local`은 켜질 때마다 메모리에서 임시 서명 키를 만들므로, 재시작하면 이전 액세스 토큰은 모두 무효가 된다
+- 공개키 목록: `GET /.well-known/jwks.json`
 
 ## 테스트
 
