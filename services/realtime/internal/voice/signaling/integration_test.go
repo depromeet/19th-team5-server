@@ -1,4 +1,4 @@
-package signaling
+package signaling_test
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 
 	"github.com/depromeet/19th-team5-server/services/realtime/internal/voice/media/pion"
 	"github.com/depromeet/19th-team5-server/services/realtime/internal/voice/protocol"
+	"github.com/depromeet/19th-team5-server/services/realtime/internal/voice/signaling"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
 )
@@ -23,7 +24,7 @@ import (
 type client struct {
 	t    *testing.T
 	id   string
-	room *Room
+	room *signaling.Room
 
 	mu sync.Mutex
 	pc *webrtc.PeerConnection
@@ -293,7 +294,7 @@ func startCall(ctx context.Context, t *testing.T) (map[string]*client, error) {
 	})
 
 	clients := make(map[string]*client)
-	r := NewServer(driver, slog.New(slog.DiscardHandler)).NewRoom(func(ctx context.Context, participantID string, msg []byte) {
+	r := signaling.NewServer(driver, slog.New(slog.DiscardHandler)).NewRoom(func(ctx context.Context, participantID string, msg []byte) {
 		clients[participantID].handle(ctx, msg)
 	})
 	for _, id := range []string{"p1", "p2", "p3", "p4"} {
