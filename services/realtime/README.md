@@ -50,9 +50,10 @@ flowchart TD
 2. `protocol`, `media`, `relay`는 다른 음성 패키지를 import하지 않는다.
 3. Pion은 `media/pion`과 `relay`에서만 import한다. `media` 계약에는 Pion 타입이 나오지 않는다.
 4. `room`과 `voice` 패키지는 서로 import하지 않는다. `room`은 음성 방을 자신의 인터페이스로 받고, `cmd/realtime`이 `voice/signaling`을 조립해 넘긴다.
-5. 구현체를 만들어 연결하는 코드는 `cmd/realtime`에만 둔다. 다른 패키지는 생성자로 받은 인터페이스만 쓴다. 예외로 `signaling`의 통합 테스트는 `media/pion`과 가짜 클라이언트용 Pion 패키지로, `room`의 외부 통합 테스트(`room_test`)는 `signaling`, `voice/protocol`, `media/pion`과 가짜 클라이언트용 Pion 패키지로 실제 연결을 만든다.
+5. 구현체를 만들어 연결하는 코드는 `cmd/realtime`에만 둔다. 다른 패키지는 생성자로 받은 인터페이스만 쓴다. 예외로 `signaling`의 외부 통합 테스트(`signaling_test`)는 `media/pion`과 가짜 클라이언트용 Pion 패키지로, `room`의 외부 통합 테스트(`room_test`)는 `signaling`, `voice/protocol`, `media/pion`과 가짜 클라이언트용 Pion 패키지로 실제 연결을 만든다.
 6. 디렉터리 중첩은 '부모는 계약, 자식은 구현'일 때만 쓴다. `media`와 `media/pion`만 해당한다. `voice/`에는 Go 코드를 두지 않는다.
 7. 인터페이스는 쓰는 쪽 패키지에 둔다. 예외는 `media` 계약 하나다. 구현이 이름을 써야 하는 타입(`Open`이 돌려주는 `Conn`, `AddCandidate`가 받는 `Candidate`)이 있어, 쓰는 쪽인 `signaling`에 두면 `media/pion`이 `signaling`을 import하게 된다.
+8. 단위 테스트는 `<파일명>_test.go`에 두고, 실제 구현체·전송 계층을 연결하는 통합 테스트는 패키지당 `integration_test.go` 하나에 외부 테스트 패키지(`package <패키지>_test`)로 둔다.
 
 ### 상태와 동시성
 
