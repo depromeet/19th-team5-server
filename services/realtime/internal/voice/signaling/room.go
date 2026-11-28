@@ -10,9 +10,34 @@ import (
 	"github.com/depromeet/19th-team5-server/services/realtime/internal/voice/protocol"
 )
 
-// room runs the signaling of one room. It handles client messages and timers
+// Server creates voice signaling rooms backed by a [media.Driver].
+type Server struct {
+	driver media.Driver
+	logger *slog.Logger
+}
+
+// NewServer returns a [Server] that opens media connections through driver.
+func NewServer(driver media.Driver, logger *slog.Logger) *Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Server{driver: driver, logger: logger}
+}
+
+// NewRoom creates a [Room] whose outgoing messages are delivered through send.
+// send must not block because the room goroutine calls it.
+func (s *Server) NewRoom(send func(ctx context.Context, participantID string, msg []byte)) *Room {
+	return &Room{
+		driver:       s.driver,
+		send:         send,
+		logger:       s.logger,
+		negotiations: make(map[string]*negotiation),
+	}
+}
+
+// Room runs the signaling of one room. It handles client messages and timers
 // one at a time on the room goroutine.
-type room struct {
+type Room struct {
 	driver media.Driver
 	// send sends msg to a participant. It must not block, because the room
 	// goroutine calls it.
@@ -27,29 +52,44 @@ type room struct {
 	negotiations map[string]*negotiation
 }
 
-func newRoom(driver media.Driver, send func(ctx context.Context, participantID string, msg []byte), logger *slog.Logger) *room {
-	return &room{
-		driver:       driver,
-		send:         send,
-		logger:       logger,
-		negotiations: make(map[string]*negotiation),
-	}
-}
-
-// receive handles a client message on the room goroutine. It takes ownership
+// Receive handles a client message on the room goroutine. It takes ownership
 // of data, and the caller should not use data after this call. It is safe to
 // call from multiple goroutines. It returns before the message is handled, and
 // the message is handled even if ctx is cancelled.
-func (r *room) receive(ctx context.Context, participantID string, data []byte) {
+func (r *Room) Receive(ctx context.Context, participantID string, data []byte) {
 	ctx = context.WithoutCancel(ctx)
 	r.post(func() { r.handle(ctx, participantID, data) })
+}
+
+// Leave removes participantID from voice signaling and closes its connection.
+func (r *Room) Leave(ctx context.Context, participantID string) {
+	ctx = context.WithoutCancel(ctx)
+	r.post(func() { r.leave(ctx, participantID) })
+}
+
+// Disconnect notifies the room that participantID's signaling connection was
+// lost while its voice connection stays open for the grace period.
+func (r *Room) Disconnect(_ context.Context, participantID string) {
+	r.post(func() {
+		if n, ok := r.negotiations[participantID]; ok {
+			n.disconnect()
+		}
+	})
+}
+
+// Reconnect notifies the room that participantID's signaling connection is
+// back. It resends any pending offer and syncs the other participants' mute
+// states.
+func (r *Room) Reconnect(ctx context.Context, participantID string) {
+	ctx = context.WithoutCancel(ctx)
+	r.post(func() { r.reconnect(ctx, participantID) })
 }
 
 // post runs f on the room goroutine after the functions posted before it, and
 // never blocks. It is safe to call from multiple goroutines. The room goroutine
 // starts when f is posted to an empty queue and exits when the queue is empty
 // again.
-func (r *room) post(f func()) {
+func (r *Room) post(f func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.queue = append(r.queue, f)
@@ -59,7 +99,7 @@ func (r *room) post(f func()) {
 	}
 }
 
-func (r *room) run() {
+func (r *Room) run() {
 	for {
 		r.mu.Lock()
 		fs := r.queue
@@ -76,7 +116,7 @@ func (r *room) run() {
 	}
 }
 
-func (r *room) handle(ctx context.Context, participantID string, data []byte) {
+func (r *Room) handle(ctx context.Context, participantID string, data []byte) {
 	msg, err := protocol.Parse(data)
 	if err != nil {
 		var parseErr *protocol.ParseError
@@ -107,7 +147,7 @@ func (r *room) handle(ctx context.Context, participantID string, data []byte) {
 	}
 }
 
-func (r *room) join(ctx context.Context, participantID string) {
+func (r *Room) join(ctx context.Context, participantID string) {
 	r.leave(ctx, participantID)
 	logger := r.logger.With("participantId", participantID)
 	var n *negotiation
@@ -150,7 +190,7 @@ func subscribe(ctx context.Context, subscriber, publisher *negotiation) {
 	}
 }
 
-func (r *room) leave(ctx context.Context, participantID string) {
+func (r *Room) leave(ctx context.Context, participantID string) {
 	n, ok := r.negotiations[participantID]
 	if !ok {
 		return
@@ -166,9 +206,23 @@ func (r *room) leave(ctx context.Context, participantID string) {
 	}
 }
 
+func (r *Room) reconnect(ctx context.Context, participantID string) {
+	n, ok := r.negotiations[participantID]
+	if !ok || n.state == stateClosed {
+		return
+	}
+	n.reconnect(ctx)
+	for otherID, other := range r.negotiations {
+		if otherID == participantID || other.state == stateClosed {
+			continue
+		}
+		r.sendMessage(ctx, participantID, protocol.Muted{ParticipantID: otherID, Muted: other.muted})
+	}
+}
+
 // setMuted mutes or unmutes the participant's voice, and tells the others if
 // that changes it.
-func (r *room) setMuted(ctx context.Context, participantID string, muted bool) {
+func (r *Room) setMuted(ctx context.Context, participantID string, muted bool) {
 	n, ok := r.negotiations[participantID]
 	// A closed connection must not be used.
 	if !ok || n.state == stateClosed || n.muted == muted {
@@ -180,7 +234,7 @@ func (r *room) setMuted(ctx context.Context, participantID string, muted bool) {
 }
 
 // sendOthers sends msg to every participant but participantID.
-func (r *room) sendOthers(ctx context.Context, participantID string, msg protocol.ServerMessage) {
+func (r *Room) sendOthers(ctx context.Context, participantID string, msg protocol.ServerMessage) {
 	for id := range r.negotiations {
 		if id != participantID {
 			r.sendMessage(ctx, id, msg)
@@ -188,7 +242,7 @@ func (r *room) sendOthers(ctx context.Context, participantID string, msg protoco
 	}
 }
 
-func (r *room) sendMessage(ctx context.Context, participantID string, msg protocol.ServerMessage) {
+func (r *Room) sendMessage(ctx context.Context, participantID string, msg protocol.ServerMessage) {
 	data, err := protocol.Marshal(msg)
 	if err != nil {
 		r.logger.WarnContext(ctx, "marshal message failed", "participantId", participantID, "err", err)

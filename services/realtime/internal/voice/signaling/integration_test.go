@@ -23,7 +23,7 @@ import (
 type client struct {
 	t    *testing.T
 	id   string
-	room *room
+	room *Room
 
 	mu sync.Mutex
 	pc *webrtc.PeerConnection
@@ -125,7 +125,7 @@ func (c *client) send(ctx context.Context, typ string, payload any) {
 		c.t.Errorf("%s: json.Marshal() failed: %v", c.id, err)
 		return
 	}
-	c.room.receive(ctx, c.id, data)
+	c.room.Receive(ctx, c.id, data)
 }
 
 // handle handles a message from the room on the room goroutine.
@@ -293,9 +293,9 @@ func startCall(ctx context.Context, t *testing.T) (map[string]*client, error) {
 	})
 
 	clients := make(map[string]*client)
-	r := newRoom(driver, func(ctx context.Context, participantID string, msg []byte) {
+	r := NewServer(driver, slog.New(slog.DiscardHandler)).NewRoom(func(ctx context.Context, participantID string, msg []byte) {
 		clients[participantID].handle(ctx, msg)
-	}, slog.New(slog.DiscardHandler))
+	})
 	for _, id := range []string{"p1", "p2", "p3", "p4"} {
 		clients[id] = &client{t: t, id: id, room: r, heard: make(map[string]time.Time)}
 	}
