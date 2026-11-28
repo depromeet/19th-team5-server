@@ -10,6 +10,7 @@ import com.nimbusds.jose.crypto.RSASSASigner
 import com.nimbusds.jwt.JWTClaimsSet
 import com.nimbusds.jwt.SignedJWT
 import org.hamcrest.Matchers.containsString
+import org.hamcrest.Matchers.hasItem
 import org.hamcrest.Matchers.not
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -112,7 +113,8 @@ class BearerAuthenticationWebTest {
             }.andExpect {
                 status { isOk() }
                 jsonPath("$.memberId") { value("123") }
-                jsonPath("$.authorities[0]") { value("ROLE_MEMBER") }
+                // Spring Security 7은 FACTOR_BEARER도 함께 넣고 순서는 정해져 있지 않다
+                jsonPath("$.authorities") { value(hasItem("ROLE_MEMBER")) }
             }
     }
 

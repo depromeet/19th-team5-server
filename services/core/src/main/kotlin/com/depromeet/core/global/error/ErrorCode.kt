@@ -13,7 +13,7 @@ enum class ErrorCode(
 ) {
     // 공통
     INVALID_REQUEST(HttpStatus.BAD_REQUEST, "요청 값이 올바르지 않습니다."),
-    INVALID_PASSWORD_FORMAT(HttpStatus.BAD_REQUEST, "비밀번호는 8~64자이고 영문과 숫자를 포함해야 합니다."),
+    INVALID_PASSWORD_FORMAT(HttpStatus.BAD_REQUEST, "비밀번호는 8~64자(한글은 23자까지)이고 영문과 숫자를 포함해야 합니다."),
     INVALID_TOKEN(HttpStatus.UNAUTHORIZED, "액세스 토큰이 없거나 올바르지 않습니다."),
     TOKEN_EXPIRED(HttpStatus.UNAUTHORIZED, "액세스 토큰이 만료되었습니다."),
     FORBIDDEN(HttpStatus.FORBIDDEN, "권한이 없습니다."),
